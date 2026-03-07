@@ -8,10 +8,10 @@ const supabase = createClient(
 );
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const ROOM_TYPES = ["Двойна", "Twin", "Семейна", "Тройна", "Апартамент"];
+const ROOM_TYPES = ["Двойна", "Семейна", "Тройна", "Апартамент"];
 const PALETTE    = ["#2563EB","#059669","#7C3AED","#DB2777","#0891B2","#D97706","#DC2626","#65A30D","#9333EA","#0284C7","#B45309","#15803D","#BE123C","#1D4ED8","#6D28D9"];
 const STATUS_MAP = { confirmed: { bg:"#DCFCE7", color:"#166534", label:"Потвърдена" },
-                     pending:   { bg:"#FEF9C3", color:"#854D0E", label:"Изчакваща"  },
+                     pending:   { bg:"#FEF9C3", color:"#854D0E", label:"Очаква депозит" },
                      cancelled: { bg:"#FEE2E2", color:"#991B1B", label:"Анулирана"  } };
 
 const DEFAULT_USERS = [
@@ -19,21 +19,21 @@ const DEFAULT_USERS = [
   { id:"u2", name:"Рецепция",      username:"staff", password:"staff123", role:"staff" },
 ];
 const DEFAULT_ROOMS = [
-  { id:"r1",  name:"Стая 101", type:"Двойна",     basePrice:90,  capacity:2, color:PALETTE[0],  notes:"Изглед към градина"  },
-  { id:"r2",  name:"Стая 102", type:"Twin",        basePrice:90,  capacity:2, color:PALETTE[1],  notes:"Тихо крило"          },
-  { id:"r3",  name:"Стая 103", type:"Двойна",     basePrice:85,  capacity:2, color:PALETTE[2],  notes:"Партерен етаж"       },
-  { id:"r4",  name:"Стая 201", type:"Двойна",     basePrice:100, capacity:2, color:PALETTE[3],  notes:"Изглед към двора"    },
-  { id:"r5",  name:"Стая 202", type:"Twin",        basePrice:95,  capacity:2, color:PALETTE[4],  notes:"Балкон"              },
-  { id:"r6",  name:"Стая 203", type:"Семейна",    basePrice:150, capacity:4, color:PALETTE[5],  notes:"Свързани стаи"       },
-  { id:"r7",  name:"Стая 204", type:"Тройна",     basePrice:130, capacity:3, color:PALETTE[6],  notes:"Голяма баня"         },
-  { id:"r8",  name:"Стая 205", type:"Двойна",     basePrice:100, capacity:2, color:PALETTE[7],  notes:"Слънчева стая"       },
-  { id:"r9",  name:"Стая 301", type:"Апартамент", basePrice:200, capacity:4, color:PALETTE[8],  notes:"Хол и спалня"        },
-  { id:"r10", name:"Стая 302", type:"Семейна",    basePrice:155, capacity:4, color:PALETTE[9],  notes:"Панорамен изглед"    },
-  { id:"r11", name:"Стая 303", type:"Twin",        basePrice:95,  capacity:2, color:PALETTE[10], notes:"Тих ъгъл"            },
-  { id:"r12", name:"Стая 304", type:"Тройна",     basePrice:135, capacity:3, color:PALETTE[11], notes:"Голям балкон"        },
-  { id:"r13", name:"Стая 305", type:"Двойна",     basePrice:105, capacity:2, color:PALETTE[12], notes:"Морски изглед"       },
-  { id:"r14", name:"Апарт. 1", type:"Апартамент", basePrice:220, capacity:5, color:PALETTE[13], notes:"Кухня и хол"         },
-  { id:"r15", name:"Апарт. 2", type:"Апартамент", basePrice:240, capacity:6, color:PALETTE[14], notes:"Луксозен, 2 бани"    },
+  { id:"r1",  name:"Стая 101", type:"Двойна",     color:PALETTE[0]  },
+  { id:"r2",  name:"Стая 102", type:"Двойна",     color:PALETTE[1]  },
+  { id:"r3",  name:"Стая 103", type:"Двойна",     color:PALETTE[2]  },
+  { id:"r4",  name:"Стая 201", type:"Двойна",     color:PALETTE[3]  },
+  { id:"r5",  name:"Стая 202", type:"Двойна",     color:PALETTE[4]  },
+  { id:"r6",  name:"Стая 203", type:"Семейна",    color:PALETTE[5]  },
+  { id:"r7",  name:"Стая 204", type:"Тройна",     color:PALETTE[6]  },
+  { id:"r8",  name:"Стая 205", type:"Двойна",     color:PALETTE[7]  },
+  { id:"r9",  name:"Стая 301", type:"Апартамент", color:PALETTE[8]  },
+  { id:"r10", name:"Стая 302", type:"Семейна",    color:PALETTE[9]  },
+  { id:"r11", name:"Стая 303", type:"Двойна",     color:PALETTE[10] },
+  { id:"r12", name:"Стая 304", type:"Тройна",     color:PALETTE[11] },
+  { id:"r13", name:"Стая 305", type:"Двойна",     color:PALETTE[12] },
+  { id:"r14", name:"Апарт. 1", type:"Апартамент", color:PALETTE[13] },
+  { id:"r15", name:"Апарт. 2", type:"Апартамент", color:PALETTE[14] },
 ];
 const DEFAULT_RATES = [
   { id:"sr1", name:"Лятно върхово натоварване", startDate:"2025-07-01", endDate:"2025-08-31", multiplier:1.4 },
@@ -120,7 +120,7 @@ function MultiSelect({ label, options, selected, onChange }) {
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [ready,    setReady]    = useState(false);
-  const [user,     setUser]     = useState(null);
+  const [user,     setUser]     = useState(()=>{ try{ const s=localStorage.getItem("hoteldesk_user"); return s?JSON.parse(s):null; }catch{ return null; } });
   const [users,    setUsers]    = useState([]);
   const [rooms,    setRooms]    = useState([]);
   const [bookings, setBookings] = useState([]);
@@ -165,14 +165,6 @@ export default function App() {
     })();
   },[]);
 
-  function calcTotal(roomId,checkIn,checkOut) {
-    const room=rooms.find(r=>r.id===roomId);
-    if(!room||!checkIn||!checkOut) return 0;
-    let total=0,d=new Date(checkIn+"T00:00:00");
-    const end=new Date(checkOut+"T00:00:00");
-    while(d<end){ const ds=fmt(d); const m=(rates.find(r=>ds>=r.startDate&&ds<=r.endDate)||{}).multiplier??1; total+=room.basePrice*m; d=addDays(d,1); }
-    return Math.round(total);
-  }
 
   // ── Data helpers ─────────────────────────────────────────────────────────────
   async function saveUser(u) {
@@ -214,7 +206,7 @@ export default function App() {
   }
 
   if(!ready) return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",gap:14,background:"#1E293B"}}><div style={{width:12,height:12,borderRadius:"50%",background:"#D97706"}}/><span style={{color:"#64748B",fontSize:14}}>Зареждане…</span></div>;
-  if(!user) return <LoginScreen users={users} onLogin={setUser}/>;
+  if(!user) return <LoginScreen users={users} onLogin={u=>{ localStorage.setItem("hoteldesk_user",JSON.stringify(u)); setUser(u); }}/>;
 
   const today=fmt(new Date());
   const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
@@ -229,7 +221,7 @@ export default function App() {
 
   return (
     <div style={{display:"flex",height:"100vh",fontFamily:"'DM Sans',sans-serif",background:"#F8FAFC",overflow:"hidden"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'DM Sans',sans-serif;}::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}input,select,textarea{font-family:inherit;}.nbtn:hover{background:rgba(255,255,255,.08)!important;color:#E2E8F0!important;}.rowhov:hover td{background:#F8FAFC!important;}.tlc:hover{background:#EFF6FF!important;}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}body{font-family:'DM Sans',sans-serif;}::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}input,select,textarea{font-family:inherit;}.nbtn:hover{background:rgba(255,255,255,.08)!important;color:#E2E8F0!important;}.rowhov:hover td{background:#F8FAFC!important;}.tlc:hover{background:#EFF6FF!important;}`}</style>
 
       {/* SIDEBAR */}
       <aside style={{width:220,background:"#1E293B",display:"flex",flexDirection:"column",flexShrink:0}}>
@@ -252,7 +244,7 @@ export default function App() {
             <div style={{width:32,height:32,borderRadius:"50%",background:"#334155",color:"#CBD5E1",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>{user.name[0]}</div>
             <div><div style={{color:"#E2E8F0",fontSize:13,fontWeight:600}}>{user.name}</div><div style={{color:"#64748B",fontSize:11}}>{user.role==="admin"?"Администратор":"Служител"}</div></div>
           </div>
-          <button onClick={()=>setUser(null)} style={{width:"100%",background:"transparent",border:"1px solid #334155",borderRadius:7,color:"#64748B",fontSize:12,padding:"6px 0",cursor:"pointer"}}>Изход</button>
+          <button onClick={()=>{ localStorage.removeItem("hoteldesk_user"); setUser(null); }} style={{width:"100%",background:"transparent",border:"1px solid #334155",borderRadius:7,color:"#64748B",fontSize:12,padding:"6px 0",cursor:"pointer"}}>Изход</button>
         </div>
       </aside>
 
@@ -351,7 +343,7 @@ export default function App() {
               {visBkgList.length===0
                 ? <div style={{textAlign:"center",padding:52,color:"#CBD5E1",fontSize:15}}>Няма резервации</div>
                 : <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                    <thead><tr>{["Гост","Стая","Настаняване","Напускане","Нощ.","Общо","Депозит","Статус",""].map(h=>(
+                    <thead><tr>{["Гост","Стая","Настаняване","Напускане","Нощ.","Депозит","Статус",""].map(h=>(
                       <th key={h} style={{textAlign:"left",padding:"10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0"}}>{h}</th>
                     ))}</tr></thead>
                     <tbody>
@@ -361,11 +353,10 @@ export default function App() {
                         return (
                           <tr key={b.id} className="rowhov" style={{borderBottom:"1px solid #F1F5F9"}}>
                             <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{b.guestName}</td>
-                            <td style={{padding:"12px 14px"}}><div style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:8,height:8,borderRadius:"50%",background:room?.color||"#ccc"}}/>{room?.name||"—"}</div></td>
+                            <td style={{padding:"12px 14px"}}><div style={{fontWeight:600,color:"#1E293B"}}>{room?.name||"—"}</div><div style={{fontSize:11,color:"#94A3B8"}}>{room?.type||""}</div></td>
                             <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkIn}</td>
                             <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkOut}</td>
                             <td style={{padding:"12px 14px",color:"#374151"}}>{nightsBetween(b.checkIn,b.checkOut)}</td>
-                            <td style={{padding:"12px 14px",fontWeight:700}}>€{b.totalPrice}</td>
                             <td style={{padding:"12px 14px"}}>{b.depositReceived?<span style={{color:"#166534",fontWeight:600}}>€{b.depositAmount}</span>:<span style={{color:"#94A3B8"}}>—</span>}</td>
                             <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span></td>
                             <td style={{padding:"12px 14px"}}><button onClick={()=>setModal({type:"viewBooking",data:b})} style={S.outlineBtn}>Преглед</button></td>
@@ -387,12 +378,6 @@ export default function App() {
                   <div style={{padding:"16px",flex:1}}>
                     <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:15,color:"#1E293B"}}>{room.name}</div>
                     <div style={{fontSize:11,color:"#94A3B8",textTransform:"uppercase",letterSpacing:".06em",margin:"3px 0 10px"}}>{room.type}</div>
-                    {[["Основна цена",`€${room.basePrice}/нощ`],["Капацитет",`${room.capacity} гости`],["Забележки",room.notes||"—"]].map(([l,v])=>(
-                      <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #F1F5F9",fontSize:13}}>
-                        <span style={{color:"#64748B"}}>{l}</span>
-                        <span style={{fontWeight:600,color:"#1E293B",textAlign:"right",maxWidth:140}}>{v}</span>
-                      </div>
-                    ))}
                   </div>
                   <div style={{padding:"12px 16px",borderTop:"1px solid #F1F5F9",display:"flex",gap:8}}>
                     <button onClick={()=>setModal({type:"room",data:{...room}})} style={S.outlineBtn}>Редактирай</button>
@@ -445,7 +430,7 @@ export default function App() {
       {modal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}
           onClick={e=>{if(e.target===e.currentTarget)setModal(null);}}>
-          {modal.type==="booking"&&<BookingModal rooms={rooms} rates={rates} calcTotal={calcTotal} bookings={bookings} initial={modal.data} user={user} onSave={b=>{saveBooking(b);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="booking"&&<BookingModal rooms={rooms} bookings={bookings} initial={modal.data} user={user} onSave={b=>{saveBooking(b);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} rooms={rooms} user={user} onEdit={()=>setModal({type:"booking",data:modal.data})} onCancel={b=>{cancelBooking(b);setModal(null);}} onDelete={b=>{removeBooking(b.id);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="room"&&<RoomModal initial={modal.data} rooms={rooms} onSave={r=>{saveRoom(r);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="rate"&&<RateModal initial={modal.data} onSave={r=>{saveRate(r);setModal(null);}} onClose={()=>setModal(null)}/>}
@@ -463,7 +448,7 @@ function LoginScreen({users,onLogin}) {
   function doLogin(){ const u=users.find(u=>u.username===form.username&&u.password===form.password); if(u) onLogin(u); else setErr("Грешно потребителско иmе или парола."); }
   return (
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}`}</style>
       <div style={{background:"#fff",borderRadius:20,padding:"38px 34px",width:"100%",maxWidth:370,boxShadow:"0 30px 80px rgba(0,0,0,.4)"}}>
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{fontSize:44,marginBottom:8}}>🏨</div>
@@ -485,36 +470,99 @@ function LoginScreen({users,onLogin}) {
 }
 
 // ── BOOKING MODAL ─────────────────────────────────────────────────────────────
-function BookingModal({rooms,rates,calcTotal,bookings,initial,user,onSave,onClose}) {
+const SOURCES = ["Booking.com","По телефона","WhatsApp","Поща","Друг"];
+function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
   const isEdit=!!initial.id;
-  const [f,setF]=useState({id:initial.id||`b${Date.now()}`,guestName:initial.guestName||"",roomId:initial.roomId||rooms[0]?.id||"",checkIn:initial.checkIn||"",checkOut:initial.checkOut||"",status:initial.status||"confirmed",notes:initial.notes||"",depositReceived:initial.depositReceived||false,depositAmount:initial.depositAmount||"",depositDate:initial.depositDate||"",createdBy:initial.createdBy||user.name});
+  const todayStr=fmt(new Date());
+  const [f,setF]=useState({
+    id:           initial.id||`b${Date.now()}`,
+    guestName:    initial.guestName||"",
+    phone:        initial.phone||"",
+    email:        initial.email||"",
+    bookingDate:  initial.bookingDate||todayStr,
+    source:       initial.source||SOURCES[0],
+    roomId:       initial.roomId||rooms[0]?.id||"",
+    checkIn:      initial.checkIn||"",
+    checkOut:     initial.checkOut||"",
+    pricePerNight:initial.pricePerNight||"",
+    status:       initial.status||"confirmed",
+    depositReceived: initial.depositReceived||false,
+    depositAmount:   initial.depositAmount||"",
+    depositDate:     initial.depositDate||"",
+    fullyPaid:    initial.fullyPaid||false,
+    notes:        initial.notes||"",
+    createdBy:    initial.createdBy||user.name,
+  });
   const [err,setErr]=useState("");
-  const nights=f.checkIn&&f.checkOut&&f.checkOut>f.checkIn?nightsBetween(f.checkIn,f.checkOut):0;
-  const total=nights>0?calcTotal(f.roomId,f.checkIn,f.checkOut):0;
-  const hasRate=rates.some(r=>f.checkIn<=r.endDate&&f.checkOut>=r.startDate);
+  const nights   = f.checkIn&&f.checkOut&&f.checkOut>f.checkIn ? nightsBetween(f.checkIn,f.checkOut) : 0;
+  const total    = nights>0&&f.pricePerNight ? Math.round(nights*Number(f.pricePerNight)) : 0;
+  const deposit  = f.depositReceived&&f.depositAmount ? Number(f.depositAmount) : 0;
+  const remaining= f.fullyPaid ? 0 : Math.max(0, total - deposit);
+
   function save(){
     if(!f.guestName.trim()) return setErr("Въведете иmе на госта.");
     if(!f.checkIn||!f.checkOut) return setErr("Задайте дати на настаняване и напускане.");
     if(f.checkOut<=f.checkIn) return setErr("Датата на напускане трябва да е след настаняването.");
+    if(!f.pricePerNight||Number(f.pricePerNight)<=0) return setErr("Въведете цена на нощ.");
     const conflict=bookings.find(b=>b.id!==f.id&&b.roomId===f.roomId&&b.status!=="cancelled"&&b.checkIn<f.checkOut&&b.checkOut>f.checkIn);
     if(conflict) return setErr(`Стаята е вече резервирана (${conflict.guestName}).`);
-    onSave({...f,totalPrice:total,depositAmount:f.depositReceived?Number(f.depositAmount):0});
+    onSave({...f, pricePerNight:Number(f.pricePerNight), totalPrice:total, depositAmount:f.depositReceived?Number(f.depositAmount):0, remaining });
   }
+
   return (
     <div style={S.modal}>
       <div style={S.modalHeader}><span style={S.modalTitle}>{isEdit?"Редактирай резервация":"Нова резервация"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
       <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
+
+        {/* Guest info */}
         <Fld label="Иmе на госта"><input value={f.guestName} onChange={e=>setF(x=>({...x,guestName:e.target.value}))} style={S.input} placeholder="Пълно иmе"/></Fld>
-        <Fld label="Стая"><select value={f.roomId} onChange={e=>setF(x=>({...x,roomId:e.target.value}))} style={S.input}>{rooms.map(r=><option key={r.id} value={r.id}>{r.name} — {r.type} (€{r.basePrice}/нощ)</option>)}</select></Fld>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Fld label="Телефон"><input value={f.phone} onChange={e=>setF(x=>({...x,phone:e.target.value}))} style={S.input} placeholder="+359…"/></Fld>
+          <Fld label="Имейл"><input type="email" value={f.email} onChange={e=>setF(x=>({...x,email:e.target.value}))} style={S.input} placeholder="guest@email.com"/></Fld>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Fld label="Дата на резервацията"><input type="date" value={f.bookingDate} onChange={e=>setF(x=>({...x,bookingDate:e.target.value}))} style={S.input}/></Fld>
+          <Fld label="Източник"><select value={f.source} onChange={e=>setF(x=>({...x,source:e.target.value}))} style={S.input}>{SOURCES.map(s=><option key={s}>{s}</option>)}</select></Fld>
+        </div>
+
+        {/* Room & dates */}
+        <Fld label="Стая"><select value={f.roomId} onChange={e=>setF(x=>({...x,roomId:e.target.value}))} style={S.input}>{rooms.map(r=><option key={r.id} value={r.id}>{r.name} — {r.type}</option>)}</select></Fld>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Fld label="Настаняване"><input type="date" value={f.checkIn} onChange={e=>setF(x=>({...x,checkIn:e.target.value}))} style={S.input}/></Fld>
           <Fld label="Напускане">  <input type="date" value={f.checkOut} onChange={e=>setF(x=>({...x,checkOut:e.target.value}))} style={S.input}/></Fld>
         </div>
-        {nights>0&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#EFF6FF",borderRadius:8,padding:"10px 14px",fontSize:14,color:"#1D4ED8",margin:"0 0 14px"}}><span>{nights} нощ{nights!==1?"увки":"увка"}</span><span style={{fontWeight:700}}>€{total}{hasRate&&<span style={{fontSize:12,color:"#D97706",marginLeft:8}}>⚡ сезонна</span>}</span></div>}
-        <Fld label="Статус"><select value={f.status} onChange={e=>setF(x=>({...x,status:e.target.value}))} style={S.input}><option value="confirmed">Потвърдена</option><option value="pending">Изчакваща</option><option value="cancelled">Анулирана</option></select></Fld>
+        <Fld label="Цена на нощ (€)"><input type="number" min="1" value={f.pricePerNight} onChange={e=>setF(x=>({...x,pricePerNight:e.target.value}))} style={S.input} placeholder="напр. 90"/></Fld>
+
+        {/* Live totals summary */}
+        {nights>0&&Number(f.pricePerNight)>0&&(
+          <div style={{background:"#EFF6FF",borderRadius:10,padding:"12px 14px",marginBottom:14,border:"1px solid #BFDBFE"}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#1D4ED8",marginBottom:4}}>
+              <span>{nights} нощ{nights!==1?"увки":"увка"} × €{f.pricePerNight}</span>
+              <span style={{fontWeight:700}}>Общо: €{total}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#059669"}}>
+              <span>Депозит</span><span style={{fontWeight:700}}>€{deposit}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:700,marginTop:6,paddingTop:6,borderTop:"1px solid #BFDBFE",color:remaining===0?"#166534":"#DC2626"}}>
+              <span>Остава за плащане</span><span>€{remaining}</span>
+            </div>
+          </div>
+        )}
+
+        <Fld label="Статус"><select value={f.status} onChange={e=>setF(x=>({...x,status:e.target.value}))} style={S.input}>
+          <option value="confirmed">Потвърдена</option>
+          <option value="pending">Очаква депозит</option>
+          <option value="cancelled">Анулирана</option>
+        </select></Fld>
+
+        {/* Payment */}
         <div style={{background:"#F8FAFC",borderRadius:10,padding:"14px",marginBottom:14,border:"1px solid #E2E8F0"}}>
+          <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:8}}>
+            <input type="checkbox" checked={f.fullyPaid} onChange={e=>setF(x=>({...x,fullyPaid:e.target.checked,depositReceived:e.target.checked?x.depositReceived:x.depositReceived}))} style={{width:16,height:16,accentColor:"#059669"}}/>
+            <span style={{fontWeight:600,fontSize:13,color:"#1E293B"}}>Изцяло платена</span>
+          </label>
           <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:f.depositReceived?14:0}}>
-            <input type="checkbox" checked={f.depositReceived} onChange={e=>setF(x=>({...x,depositReceived:e.target.checked}))} style={{width:16,height:16,accentColor:"#059669"}}/>
+            <input type="checkbox" checked={f.depositReceived} onChange={e=>setF(x=>({...x,depositReceived:e.target.checked}))} style={{width:16,height:16,accentColor:"#D97706"}}/>
             <span style={{fontWeight:600,fontSize:13,color:"#1E293B"}}>Получен депозит</span>
           </label>
           {f.depositReceived&&(
@@ -524,8 +572,16 @@ function BookingModal({rooms,rates,calcTotal,bookings,initial,user,onSave,onClos
             </div>
           )}
         </div>
+
+        {/* Remaining amount — always visible once total is known */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderRadius:10,marginBottom:14,border:`2px solid ${remaining===0?"#BBF7D0":"#FECACA"}`,background:remaining===0?"#F0FDF4":"#FFF5F5"}}>
+          <span style={{fontWeight:700,fontSize:14,color:remaining===0?"#166534":"#991B1B"}}>Остава за плащане</span>
+          <span style={{fontWeight:800,fontSize:18,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>
+        </div>
+
         <Fld label="Забележки"><input value={f.notes} onChange={e=>setF(x=>({...x,notes:e.target.value}))} style={S.input} placeholder="По желание…"/></Fld>
-        {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:4}}>{err}</div>}
+        <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>Добавена от: <strong style={{color:"#475569"}}>{f.createdBy}</strong></div>
+        {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:10}}>{err}</div>}
       </div>
       <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
@@ -540,7 +596,27 @@ function ViewBookingModal({booking:b,rooms,user,onEdit,onCancel,onDelete,onClose
   const room=rooms.find(r=>r.id===b.roomId);
   const nights=nightsBetween(b.checkIn,b.checkOut);
   const st=STATUS_MAP[b.status]||STATUS_MAP.confirmed;
-  const rows=[["Гост",b.guestName],["Стая",room?.name||"—"],["Тип",room?.type||"—"],["Настаняване",b.checkIn],["Напускане",b.checkOut],["Нощувки",nights],["Обща сума",`€${b.totalPrice}`],["Депозит",b.depositReceived?`€${b.depositAmount} (${b.depositDate})`:"Не е получен"],["Статус",<span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span>],["Забележки",b.notes||"—"],["Добавена от",b.createdBy||"—"]];
+  const remaining=b.fullyPaid?0:Math.max(0,(b.totalPrice||0)-(b.depositReceived?b.depositAmount||0:0));
+  const rows=[
+    ["Гост",           b.guestName],
+    ["Телефон",        b.phone||"—"],
+    ["Имейл",          b.email||"—"],
+    ["Дата на резервацията", b.bookingDate||"—"],
+    ["Източник",       b.source||"—"],
+    ["Стая",           room?.name||"—"],
+    ["Тип",            room?.type||"—"],
+    ["Настаняване",    b.checkIn],
+    ["Напускане",      b.checkOut],
+    ["Нощувки",        nights],
+    ["Цена/нощ",       b.pricePerNight?`€${b.pricePerNight}`:"—"],
+    ["Обща сума",      `€${b.totalPrice||0}`],
+    ["Депозит",        b.depositReceived?`€${b.depositAmount} (${b.depositDate})`:"Не е получен"],
+    ["Изцяло платена", b.fullyPaid?<span style={{color:"#166534",fontWeight:700}}>✓ Да</span>:<span style={{color:"#94A3B8"}}>Не</span>],
+    ["Остава за плащане", <span style={{fontWeight:700,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>],
+    ["Статус",         <span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span>],
+    ["Забележки",      b.notes||"—"],
+    ["Добавена от",    b.createdBy||"—"],
+  ];
   return (
     <div style={S.modal}>
       <div style={S.modalHeader}><span style={S.modalTitle}>Детайли за резервацията</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
@@ -564,20 +640,15 @@ function ViewBookingModal({booking:b,rooms,user,onEdit,onCancel,onDelete,onClose
 // ── ROOM MODAL ────────────────────────────────────────────────────────────────
 function RoomModal({initial,rooms,onSave,onClose}) {
   const isEdit=!!initial.id;
-  const [f,setF]=useState({id:initial.id||`r${Date.now()}`,name:initial.name||"",type:initial.type||ROOM_TYPES[0],basePrice:initial.basePrice||100,capacity:initial.capacity||2,notes:initial.notes||"",color:initial.color||PALETTE[rooms.length%PALETTE.length]});
+  const [f,setF]=useState({id:initial.id||`r${Date.now()}`,name:initial.name||"",type:initial.type||ROOM_TYPES[0],color:initial.color||PALETTE[rooms.length%PALETTE.length]});
   const [err,setErr]=useState("");
-  function save(){ if(!f.name.trim()) return setErr("Въведете иmе на стаята."); if(Number(f.basePrice)<=0) return setErr("Въведете валидна цена."); onSave({...f,basePrice:Number(f.basePrice),capacity:Number(f.capacity)}); }
+  function save(){ if(!f.name.trim()) return setErr("Въведете иmе на стаята."); onSave(f); }
   return (
     <div style={S.modal}>
       <div style={S.modalHeader}><span style={S.modalTitle}>{isEdit?"Редактирай стая":"Добави стая"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
       <div style={{padding:"18px 20px"}}>
         <Fld label="Иmе / Номер"><input value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))} style={S.input} placeholder="напр. Стая 205"/></Fld>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Fld label="Тип"><select value={f.type} onChange={e=>setF(x=>({...x,type:e.target.value}))} style={S.input}>{ROOM_TYPES.map(t=><option key={t}>{t}</option>)}</select></Fld>
-          <Fld label="Капацитет (гости)"><input type="number" min="1" max="20" value={f.capacity} onChange={e=>setF(x=>({...x,capacity:e.target.value}))} style={S.input}/></Fld>
-        </div>
-        <Fld label="Основна цена (€/нощ)"><input type="number" min="1" value={f.basePrice} onChange={e=>setF(x=>({...x,basePrice:e.target.value}))} style={S.input}/></Fld>
-        <Fld label="Забележки"><input value={f.notes} onChange={e=>setF(x=>({...x,notes:e.target.value}))} style={S.input} placeholder="напр. балкон, изглед…"/></Fld>
+        <Fld label="Тип"><select value={f.type} onChange={e=>setF(x=>({...x,type:e.target.value}))} style={S.input}>{ROOM_TYPES.map(t=><option key={t}>{t}</option>)}</select></Fld>
         <Fld label="Цвят"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{PALETTE.map(c=><div key={c} onClick={()=>setF(x=>({...x,color:c}))} style={{width:28,height:28,borderRadius:"50%",background:c,cursor:"pointer",border:f.color===c?"3px solid #1E293B":"3px solid transparent",transition:"border .1s"}}/>)}</div></Fld>
         {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:4}}>{err}</div>}
       </div>
