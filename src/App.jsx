@@ -1,4 +1,11 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ── Supabase ──────────────────────────────────────────────────────────────────
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const ROOM_TYPES = ["Двойна", "Twin", "Семейна", "Тройна", "Апартамент"];
@@ -40,8 +47,23 @@ function pad(n) { return String(n).padStart(2,"0"); }
 function fmt(d) { return d instanceof Date?`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`:d; }
 function addDays(d,n) { const x=new Date(d); x.setDate(x.getDate()+n); return x; }
 function nightsBetween(a,b) { return Math.round((new Date(b)-new Date(a))/86400000); }
-async function sget(key,def) { try{ const r=await window.storage.get(key); return r?JSON.parse(r.value):def; }catch{ return def; } }
-async function sset(key,val) { try{ await window.storage.set(key,JSON.stringify(val)); }catch(e){ console.error(e); } }
+
+// ── Supabase data operations ──────────────────────────────────────────────────
+async function dbUpsert(table, record) {
+  const { error } = await supabase.from(table).upsert(record);
+  if (error) console.error(`Error upserting into ${table}:`, error);
+  return !error;
+}
+async function dbDelete(table, id) {
+  const { error } = await supabase.from(table).delete().eq("id", id);
+  if (error) console.error(`Error deleting from ${table}:`, error);
+  return !error;
+}
+async function dbSelect(table) {
+  const { data, error } = await supabase.from(table).select("*");
+  if (error) console.error(`Error selecting from ${table}:`, error);
+  return data || [];
+}
 
 // ── Multi-select dropdown ─────────────────────────────────────────────────────
 function MultiSelect({ label, options, selected, onChange }) {
@@ -110,18 +132,38 @@ export default function App() {
   const [calFilter,  setCalFilter]  = useState([]);
   const [bkgFilter,  setBkgFilter]  = useState([]);
 
+  // Load all data from Supabase on mount
   useEffect(()=>{
     (async()=>{
-      const [u,r,b,rt]=await Promise.all([sget("hm3:users",DEFAULT_USERS),sget("hm3:rooms",DEFAULT_ROOMS),sget("hm3:bookings",[]),sget("hm3:rates",DEFAULT_RATES)]);
-      setUsers(u); setRooms(r); setBookings(b); setRates(rt); setReady(true);
+      const [u, r, b, rt] = await Promise.all([
+        dbSelect("users"),
+        dbSelect("rooms"),
+        dbSelect("bookings"),
+        dbSelect("rates"),
+      ]);
+      // Seed defaults if tables are empty (first run)
+      if (!u.length) {
+        await Promise.all(DEFAULT_USERS.map(x => dbUpsert("users", x)));
+        setUsers(DEFAULT_USERS);
+      } else {
+        setUsers(u);
+      }
+      if (!r.length) {
+        await Promise.all(DEFAULT_ROOMS.map(x => dbUpsert("rooms", x)));
+        setRooms(DEFAULT_ROOMS);
+      } else {
+        setRooms(r);
+      }
+      if (!rt.length) {
+        await Promise.all(DEFAULT_RATES.map(x => dbUpsert("rates", x)));
+        setRates(DEFAULT_RATES);
+      } else {
+        setRates(rt);
+      }
+      setBookings(b);
+      setReady(true);
     })();
   },[]);
-
-  const persist=(key,setter)=>data=>{setter(data);sset(key,data);};
-  const saveUsers    = persist("hm3:users",    setUsers);
-  const saveRooms    = persist("hm3:rooms",    setRooms);
-  const saveBookings = persist("hm3:bookings", setBookings);
-  const saveRates    = persist("hm3:rates",    setRates);
 
   function calcTotal(roomId,checkIn,checkOut) {
     const room=rooms.find(r=>r.id===roomId);
@@ -130,6 +172,45 @@ export default function App() {
     const end=new Date(checkOut+"T00:00:00");
     while(d<end){ const ds=fmt(d); const m=(rates.find(r=>ds>=r.startDate&&ds<=r.endDate)||{}).multiplier??1; total+=room.basePrice*m; d=addDays(d,1); }
     return Math.round(total);
+  }
+
+  // ── Data helpers ─────────────────────────────────────────────────────────────
+  async function saveUser(u) {
+    await dbUpsert("users", u);
+    setUsers(prev => [...prev, u]);
+  }
+  async function removeUser(id) {
+    await dbDelete("users", id);
+    setUsers(prev => prev.filter(x => x.id !== id));
+  }
+  async function saveRoom(r) {
+    await dbUpsert("rooms", r);
+    setRooms(prev => prev.find(x=>x.id===r.id) ? prev.map(x=>x.id===r.id?r:x) : [...prev, r]);
+  }
+  async function removeRoom(id) {
+    await dbDelete("rooms", id);
+    setRooms(prev => prev.filter(x => x.id !== id));
+  }
+  async function saveBooking(b) {
+    await dbUpsert("bookings", b);
+    setBookings(prev => prev.find(x=>x.id===b.id) ? prev.map(x=>x.id===b.id?b:x) : [...prev, b]);
+  }
+  async function cancelBooking(b) {
+    const updated = { ...b, status: "cancelled" };
+    await dbUpsert("bookings", updated);
+    setBookings(prev => prev.map(x => x.id === b.id ? updated : x));
+  }
+  async function removeBooking(id) {
+    await dbDelete("bookings", id);
+    setBookings(prev => prev.filter(x => x.id !== id));
+  }
+  async function saveRate(r) {
+    await dbUpsert("rates", r);
+    setRates(prev => prev.find(x=>x.id===r.id) ? prev.map(x=>x.id===r.id?r:x) : [...prev, r]);
+  }
+  async function removeRate(id) {
+    await dbDelete("rates", id);
+    setRates(prev => prev.filter(x => x.id !== id));
   }
 
   if(!ready) return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",gap:14,background:"#1E293B"}}><div style={{width:12,height:12,borderRadius:"50%",background:"#D97706"}}/><span style={{color:"#64748B",fontSize:14}}>Зареждане…</span></div>;
@@ -315,7 +396,7 @@ export default function App() {
                   </div>
                   <div style={{padding:"12px 16px",borderTop:"1px solid #F1F5F9",display:"flex",gap:8}}>
                     <button onClick={()=>setModal({type:"room",data:{...room}})} style={S.outlineBtn}>Редактирай</button>
-                    {user.role==="admin"&&<button onClick={()=>{if(confirm("Изтриете тази стая?")) saveRooms(rooms.filter(r=>r.id!==room.id));}} style={S.dangerBtn}>Изтрий</button>}
+                    {user.role==="admin"&&<button onClick={()=>{if(confirm("Изтриете тази стая?")) removeRoom(room.id);}} style={S.dangerBtn}>Изтрий</button>}
                   </div>
                 </div>
               ))}
@@ -334,7 +415,7 @@ export default function App() {
                     <div style={{padding:"5px 13px",borderRadius:20,background:"#FFF7ED",color:"#B45309",fontWeight:700,fontSize:13,flexShrink:0}}>×{rate.multiplier}</div>
                     <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14,color:"#1E293B"}}>{rate.name}</div><div style={{fontSize:12,color:"#94A3B8"}}>{rate.startDate} → {rate.endDate}</div></div>
                     <button onClick={()=>setModal({type:"rate",data:{...rate}})} style={S.outlineBtn}>Редактирай</button>
-                    <button onClick={()=>saveRates(rates.filter(r=>r.id!==rate.id))} style={S.dangerBtn}>×</button>
+                    <button onClick={()=>removeRate(rate.id)} style={S.dangerBtn}>×</button>
                   </div>
                 ))}
               </div>
@@ -351,7 +432,7 @@ export default function App() {
                     <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{u.name}</td>
                     <td style={{padding:"12px 14px",color:"#374151"}}>{u.username}</td>
                     <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:u.role==="admin"?"#DCFCE7":"#F1F5F9",color:u.role==="admin"?"#166534":"#475569"}}>{u.role==="admin"?"Администратор":"Служител"}</span></td>
-                    <td style={{padding:"12px 14px"}}>{u.id!==user.id&&<button onClick={()=>{if(confirm("Премахнете служителя?")) saveUsers(users.filter(x=>x.id!==u.id));}} style={S.dangerBtn}>Премахни</button>}</td>
+                    <td style={{padding:"12px 14px"}}>{u.id!==user.id&&<button onClick={()=>{if(confirm("Премахнете служителя?")) removeUser(u.id);}} style={S.dangerBtn}>Премахни</button>}</td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -364,11 +445,11 @@ export default function App() {
       {modal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}
           onClick={e=>{if(e.target===e.currentTarget)setModal(null);}}>
-          {modal.type==="booking"&&<BookingModal rooms={rooms} rates={rates} calcTotal={calcTotal} bookings={bookings} initial={modal.data} user={user} onSave={b=>{const ex=bookings.find(x=>x.id===b.id); saveBookings(ex?bookings.map(x=>x.id===b.id?b:x):[...bookings,b]); setModal(null);}} onClose={()=>setModal(null)}/>}
-          {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} rooms={rooms} user={user} onEdit={()=>setModal({type:"booking",data:modal.data})} onCancel={b=>{saveBookings(bookings.map(x=>x.id===b.id?{...b,status:"cancelled"}:x));setModal(null);}} onDelete={b=>{saveBookings(bookings.filter(x=>x.id!==b.id));setModal(null);}} onClose={()=>setModal(null)}/>}
-          {modal.type==="room"&&<RoomModal initial={modal.data} rooms={rooms} onSave={r=>{const ex=rooms.find(x=>x.id===r.id); saveRooms(ex?rooms.map(x=>x.id===r.id?r:x):[...rooms,r]); setModal(null);}} onClose={()=>setModal(null)}/>}
-          {modal.type==="rate"&&<RateModal initial={modal.data} onSave={r=>{const ex=rates.find(x=>x.id===r.id); saveRates(ex?rates.map(x=>x.id===r.id?r:x):[...rates,r]); setModal(null);}} onClose={()=>setModal(null)}/>}
-          {modal.type==="staff"&&<StaffModal users={users} onSave={u=>{saveUsers([...users,u]);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="booking"&&<BookingModal rooms={rooms} rates={rates} calcTotal={calcTotal} bookings={bookings} initial={modal.data} user={user} onSave={b=>{saveBooking(b);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} rooms={rooms} user={user} onEdit={()=>setModal({type:"booking",data:modal.data})} onCancel={b=>{cancelBooking(b);setModal(null);}} onDelete={b=>{removeBooking(b.id);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="room"&&<RoomModal initial={modal.data} rooms={rooms} onSave={r=>{saveRoom(r);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="rate"&&<RateModal initial={modal.data} onSave={r=>{saveRate(r);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="staff"&&<StaffModal users={users} onSave={u=>{saveUser(u);setModal(null);}} onClose={()=>setModal(null)}/>}
         </div>
       )}
     </div>
@@ -431,8 +512,6 @@ function BookingModal({rooms,rates,calcTotal,bookings,initial,user,onSave,onClos
         </div>
         {nights>0&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#EFF6FF",borderRadius:8,padding:"10px 14px",fontSize:14,color:"#1D4ED8",margin:"0 0 14px"}}><span>{nights} нощ{nights!==1?"увки":"увка"}</span><span style={{fontWeight:700}}>€{total}{hasRate&&<span style={{fontSize:12,color:"#D97706",marginLeft:8}}>⚡ сезонна</span>}</span></div>}
         <Fld label="Статус"><select value={f.status} onChange={e=>setF(x=>({...x,status:e.target.value}))} style={S.input}><option value="confirmed">Потвърдена</option><option value="pending">Изчакваща</option><option value="cancelled">Анулирана</option></select></Fld>
-
-        {/* DEPOSIT */}
         <div style={{background:"#F8FAFC",borderRadius:10,padding:"14px",marginBottom:14,border:"1px solid #E2E8F0"}}>
           <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:f.depositReceived?14:0}}>
             <input type="checkbox" checked={f.depositReceived} onChange={e=>setF(x=>({...x,depositReceived:e.target.checked}))} style={{width:16,height:16,accentColor:"#059669"}}/>
@@ -445,7 +524,6 @@ function BookingModal({rooms,rates,calcTotal,bookings,initial,user,onSave,onClos
             </div>
           )}
         </div>
-
         <Fld label="Забележки"><input value={f.notes} onChange={e=>setF(x=>({...x,notes:e.target.value}))} style={S.input} placeholder="По желание…"/></Fld>
         {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:4}}>{err}</div>}
       </div>
