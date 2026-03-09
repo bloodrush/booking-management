@@ -41,6 +41,12 @@ const DEFAULT_RATES = [
   { id:"sr3", name:"Нисък сезон",                startDate:"2025-11-01", endDate:"2025-11-30", multiplier:0.8 },
 ];
 const BG_MONTHS = ["Януари","Февруари","Март","Април","Май","Юни","Юли","Август","Септември","Октомври","Ноември","Декември"];
+const GUEST_STATUS = {
+  regular:     { label:"Редовен",      bg:"#EFF6FF", color:"#1D4ED8" },
+  vip:         { label:"VIP",          bg:"#FEF9C3", color:"#854D0E" },
+  problematic: { label:"Проблемен",    bg:"#FEE2E2", color:"#991B1B" },
+  blacklisted: { label:"Черен списък", bg:"#1E293B", color:"#F8FAFC" },
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function pad(n) { return String(n).padStart(2,"0"); }
@@ -125,7 +131,9 @@ export default function App() {
   const [rooms,    setRooms]    = useState([]);
   const [bookings, setBookings] = useState([]);
   const [rates,    setRates]    = useState([]);
-  const [view,     setView]     = useState("calendar");
+  const [guests,   setGuests]   = useState([]);
+  const [view, setView] = useState(()=>localStorage.getItem("hoteldesk_view")||"calendar");
+  function navigate(v){ setView(v); localStorage.setItem("hoteldesk_view",v); }
   const [modal,    setModal]    = useState(null);
   const [calYear,  setCalYear]  = useState(new Date().getFullYear());
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
@@ -135,32 +143,38 @@ export default function App() {
   // Load all data from Supabase on mount
   useEffect(()=>{
     (async()=>{
-      const [u, r, b, rt] = await Promise.all([
+      const [u, r, b, rt, g] = await Promise.all([
         dbSelect("users"),
         dbSelect("rooms"),
         dbSelect("bookings"),
         dbSelect("rates"),
+        dbSelect("guests"),
       ]);
-      // Seed defaults if tables are empty (first run)
-      if (!u.length) {
-        await Promise.all(DEFAULT_USERS.map(x => dbUpsert("users", x)));
-        setUsers(DEFAULT_USERS);
-      } else {
-        setUsers(u);
+      if (!u.length) { await Promise.all(DEFAULT_USERS.map(x => dbUpsert("users", x))); setUsers(DEFAULT_USERS); } else { setUsers(u); }
+      if (!r.length) { await Promise.all(DEFAULT_ROOMS.map(x => dbUpsert("rooms", x))); setRooms(DEFAULT_ROOMS); } else { setRooms(r); }
+      if (!rt.length) { await Promise.all(DEFAULT_RATES.map(x => dbUpsert("rates", x))); setRates(DEFAULT_RATES); } else { setRates(rt); }
+
+      // ── Guest migration ────────────────────────────────────────────
+      // For each booking without a guestId, auto-create/link a guest profile
+      let guestList = [...g];
+      const updatedBookings = [...b];
+      const bookingsWithoutGuest = b.filter(bk => !bk.guestId && bk.phone);
+      for (const bk of bookingsWithoutGuest) {
+        const phone = bk.phone.trim();
+        // Check both already-existing guests AND ones created earlier in this same loop
+        let existing = guestList.find(gx => gx.phone?.trim() === phone);
+        if (!existing) {
+          existing = { id:`g${Date.now()}_${Math.random().toString(36).slice(2,6)}`, name:bk.guestName, phone, email:bk.email||"", nationality:bk.nationality||"", status:"regular", notes:"", createdAt:bk.bookingDate||fmt(new Date()) };
+          await dbUpsert("guests", existing);
+          guestList.push(existing); // add to list immediately so next iteration finds it
+        }
+        const updated = { ...bk, guestId: existing.id };
+        await dbUpsert("bookings", updated);
+        const idx = updatedBookings.findIndex(x => x.id === bk.id);
+        if (idx !== -1) updatedBookings[idx] = updated;
       }
-      if (!r.length) {
-        await Promise.all(DEFAULT_ROOMS.map(x => dbUpsert("rooms", x)));
-        setRooms(DEFAULT_ROOMS);
-      } else {
-        setRooms(r);
-      }
-      if (!rt.length) {
-        await Promise.all(DEFAULT_RATES.map(x => dbUpsert("rates", x)));
-        setRates(DEFAULT_RATES);
-      } else {
-        setRates(rt);
-      }
-      setBookings(b);
+      setGuests(guestList);
+      setBookings(updatedBookings);
       setReady(true);
     })();
   },[]);
@@ -183,14 +197,65 @@ export default function App() {
     await dbDelete("rooms", id);
     setRooms(prev => prev.filter(x => x.id !== id));
   }
-  async function saveBooking(b) {
-    await dbUpsert("bookings", b);
-    setBookings(prev => prev.find(x=>x.id===b.id) ? prev.map(x=>x.id===b.id?b:x) : [...prev, b]);
+  async function saveGuest(g) {
+    await dbUpsert("guests", g);
+    setGuests(prev => prev.find(x=>x.id===g.id) ? prev.map(x=>x.id===g.id?g:x) : [...prev, g]);
+  }
+  async function removeGuest(id) {
+    await dbDelete("guests", id);
+    setGuests(prev => prev.filter(x => x.id !== id));
+  }
+  // Recalculates and persists totalSpent + totalStays on a guest record
+  async function updateGuestStats(guestId, updatedBookings) {
+    const gBkgs = updatedBookings.filter(b => b.guestId === guestId && b.status !== "cancelled");
+    const totalSpent = gBkgs.reduce((s, b) => s + Number(b.totalPrice || 0), 0);
+    const totalStays = gBkgs.length;
+    const lastVisit = gBkgs.map(b => b.checkIn).sort().reverse()[0] || "";
+    setGuests(prev => prev.map(g => {
+      if (g.id !== guestId) return g;
+      const updated = { ...g, totalSpent, totalStays, lastVisit };
+      dbUpsert("guests", updated);
+      return updated;
+    }));
+  }
+
+  // Smart saveBooking: auto-creates or links guest profile, flags conflicts
+  async function saveBooking(b, onConflict) {
+    let guestId = b.guestId;
+    if (b.phone) {
+      const phone = b.phone.trim();
+      const existing = guests.find(g => g.phone?.trim() === phone);
+      if (existing) {
+        if (existing.name.trim().toLowerCase() !== b.guestName.trim().toLowerCase()) {
+          if (onConflict) { onConflict(existing, b); return; }
+        }
+        guestId = existing.id;
+        if (b.nationality && b.nationality !== existing.nationality) {
+          const updatedGuest = { ...existing, nationality: b.nationality };
+          await dbUpsert("guests", updatedGuest);
+          setGuests(prev => prev.map(g => g.id === existing.id ? updatedGuest : g));
+        }
+      } else {
+        const newGuest = { id:`g${Date.now()}`, name:b.guestName, phone, email:b.email||"", nationality:b.nationality||"", status:"regular", notes:"", totalSpent:0, totalStays:0, lastVisit:"", createdAt:fmt(new Date()) };
+        await dbUpsert("guests", newGuest);
+        setGuests(prev => [...prev, newGuest]);
+        guestId = newGuest.id;
+      }
+    }
+    const finalBooking = { ...b, guestId };
+    await dbUpsert("bookings", finalBooking);
+    const updatedBookings = bookings.find(x=>x.id===finalBooking.id)
+      ? bookings.map(x=>x.id===finalBooking.id?finalBooking:x)
+      : [...bookings, finalBooking];
+    setBookings(updatedBookings);
+    if (guestId) await updateGuestStats(guestId, updatedBookings);
   }
   async function cancelBooking(b) {
     const updated = { ...b, status: "cancelled" };
     await dbUpsert("bookings", updated);
-    setBookings(prev => prev.map(x => x.id === b.id ? updated : x));
+    const updatedBookings = bookings.map(x => x.id === b.id ? updated : x);
+    setBookings(updatedBookings);
+    if (b.guestId) await updateGuestStats(b.guestId, updatedBookings);
   }
   async function removeBooking(id) {
     await dbDelete("bookings", id);
@@ -217,22 +282,22 @@ export default function App() {
   const monthCount  = bookings.filter(b=>{ const ms=`${calYear}-${pad(calMonth+1)}-01`,me=`${calYear}-${pad(calMonth+1)}-${pad(daysInMonth)}`; return b.checkIn<=me&&b.checkOut>ms&&b.status!=="cancelled"; }).length;
   const monthRev    = bookings.filter(b=>b.checkIn.startsWith(`${calYear}-${pad(calMonth+1)}`)&&b.status!=="cancelled").reduce((s,b)=>s+b.totalPrice,0);
 
-  const navItems=[{id:"calendar",label:"Календар",icon:"📅"},{id:"bookings",label:"Резервации",icon:"📋"},{id:"rooms",label:"Стаи",icon:"🛏️"},{id:"rates",label:"Тарифи",icon:"💰"},...(user.role==="admin"?[{id:"staff",label:"Персонал",icon:"👥"}]:[])];
+  const navItems=[{id:"calendar",label:"Календар",icon:"📅"},{id:"bookings",label:"Резервации",icon:"📋"},{id:"rooms",label:"Стаи",icon:"🛏️"},{id:"rates",label:"Тарифи",icon:"💰"},{id:"guests",label:"Гости",icon:"👤"},...(user.role==="admin"?[{id:"staff",label:"Персонал",icon:"👥"}]:[])];
 
   return (
-    <div style={{display:"flex",height:"100vh",fontFamily:"'DM Sans',sans-serif",background:"#F8FAFC",overflow:"hidden"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}body{font-family:'DM Sans',sans-serif;}::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}input,select,textarea{font-family:inherit;}.nbtn:hover{background:rgba(255,255,255,.08)!important;color:#E2E8F0!important;}.rowhov:hover td{background:#F8FAFC!important;}.tlc:hover{background:#EFF6FF!important;}`}</style>
+    <div style={{display:"flex",height:"100vh",fontFamily:"'Inter',sans-serif",background:"#F8FAFC",overflow:"hidden"}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}body{font-family:'Inter',sans-serif;}::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}input,select,textarea{font-family:inherit;}.nbtn:hover{background:rgba(255,255,255,.08)!important;color:#E2E8F0!important;}.rowhov:hover td{background:#F8FAFC!important;}.tlc:hover{background:#EFF6FF!important;}`}</style>
 
       {/* SIDEBAR */}
       <aside style={{width:220,background:"#1E293B",display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:10,padding:"20px 16px",borderBottom:"1px solid rgba(255,255,255,.07)"}}>
           <span style={{fontSize:26}}>🏨</span>
-          <div><div style={{fontFamily:"'Playfair Display',serif",fontSize:17,fontWeight:700,color:"#F1F5F9"}}>HotelDesk</div>
+          <div><div style={{fontFamily:"'Inter',sans-serif",fontSize:17,fontWeight:700,color:"#F1F5F9"}}>HotelDesk</div>
           <div style={{fontSize:10,color:"#475569",textTransform:"uppercase",letterSpacing:".08em",marginTop:2}}>Управление</div></div>
         </div>
         <nav style={{flex:1,padding:"12px 8px",display:"flex",flexDirection:"column",gap:2}}>
           {navItems.map(item=>(
-            <button key={item.id} className="nbtn" onClick={()=>setView(item.id)} style={{
+            <button key={item.id} className="nbtn" onClick={()=>navigate(item.id)} style={{
               display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,border:"none",
               background:view===item.id?"rgba(217,119,6,.18)":"transparent",
               color:view===item.id?"#FBBF24":"#94A3B8",fontSize:13,fontWeight:500,cursor:"pointer",textAlign:"left",transition:"all .15s"
@@ -251,7 +316,7 @@ export default function App() {
       {/* MAIN */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
         <header style={{height:54,background:"#fff",borderBottom:"1px solid #E2E8F0",display:"flex",alignItems:"center",padding:"0 22px",gap:14,flexShrink:0}}>
-          <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:19,fontWeight:700,color:"#1E293B",flex:1}}>{navItems.find(n=>n.id===view)?.label}</h1>
+          <h1 style={{fontFamily:"'Inter',sans-serif",fontSize:19,fontWeight:700,color:"#1E293B",flex:1}}>{navItems.find(n=>n.id===view)?.label}</h1>
           {(view==="calendar"||view==="bookings") && <button onClick={()=>setModal({type:"booking",data:{}})} style={S.primaryBtn}>+ Нова резервация</button>}
           {view==="rooms" && <button onClick={()=>setModal({type:"room",data:{}})} style={S.primaryBtn}>+ Добави стая</button>}
           {view==="rates" && <button onClick={()=>setModal({type:"rate",data:{}})} style={S.primaryBtn}>+ Добави тарифа</button>}
@@ -266,14 +331,14 @@ export default function App() {
               {[["Общо стаи",`${rooms.length}`,"в хотела"],["Заети днес",`${occupied}`,`от ${rooms.length} стаи`],["Резервации",`${monthCount}`,`за ${BG_MONTHS[calMonth]}`],["Приходи",`€${monthRev.toLocaleString()}`,"потвърдени"]].map(([l,v,s])=>(
                 <div key={l} style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
                   <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.2px",textTransform:"uppercase",color:"#94A3B8",marginBottom:6}}>{l}</div>
-                  <div style={{fontFamily:"'Playfair Display',serif",fontSize:26,color:"#1E293B"}}>{v}</div>
+                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:26,color:"#1E293B"}}>{v}</div>
                   <div style={{fontSize:12,color:"#D97706",fontWeight:600,marginTop:4}}>{s}</div>
                 </div>
               ))}
             </div>
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
               <button onClick={()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);}} style={S.navBtn}>‹</button>
-              <span style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:700,color:"#1E293B",minWidth:200,textAlign:"center"}}>{BG_MONTHS[calMonth]} {calYear}</span>
+              <span style={{fontFamily:"'Inter',sans-serif",fontSize:20,fontWeight:700,color:"#1E293B",minWidth:200,textAlign:"center"}}>{BG_MONTHS[calMonth]} {calYear}</span>
               <button onClick={()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);}} style={S.navBtn}>›</button>
               <MultiSelect label="Стаи" options={rooms} selected={calFilter} onChange={setCalFilter}/>
               <button onClick={()=>{const t=new Date();setCalMonth(t.getMonth());setCalYear(t.getFullYear());}} style={{...S.navBtn,marginLeft:"auto"}}>Днес</button>
@@ -376,7 +441,7 @@ export default function App() {
                 <div key={room.id} style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)",display:"flex",flexDirection:"column"}}>
                   <div style={{height:5,background:room.color}}/>
                   <div style={{padding:"16px",flex:1}}>
-                    <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:15,color:"#1E293B"}}>{room.name}</div>
+                    <div style={{fontFamily:"'Inter',sans-serif",fontWeight:700,fontSize:15,color:"#1E293B"}}>{room.name}</div>
                     <div style={{fontSize:11,color:"#94A3B8",textTransform:"uppercase",letterSpacing:".06em",margin:"3px 0 10px"}}>{room.type}</div>
                   </div>
                   <div style={{padding:"12px 16px",borderTop:"1px solid #F1F5F9",display:"flex",gap:8}}>
@@ -391,7 +456,7 @@ export default function App() {
           {/* ══ RATES ═════════════════════════════════════════════════ */}
           {view==="rates" && (
             <div style={{maxWidth:640,background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
-              <div style={{padding:"16px 20px",borderBottom:"1px solid #F1F5F9",fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:700,color:"#1E293B"}}>Сезонни тарифи</div>
+              <div style={{padding:"16px 20px",borderBottom:"1px solid #F1F5F9",fontFamily:"'Inter',sans-serif",fontSize:16,fontWeight:700,color:"#1E293B"}}>Сезонни тарифи</div>
               <div style={{padding:"8px 20px 16px"}}>
                 <p style={{fontSize:13,color:"#64748B",margin:"8px 0 16px"}}>Коефициентите умножават основната цена. 1.4 означава +40%.</p>
                 {rates.length===0&&<div style={{textAlign:"center",padding:32,color:"#CBD5E1"}}>Няма добавени тарифи</div>}
@@ -423,6 +488,9 @@ export default function App() {
               </table>
             </div>
           )}
+          {/* ══ GUESTS ════════════════════════════════════════════════ */}
+          {view==="guests" && <GuestDirectory guests={guests} onEdit={g=>setModal({type:"guest",data:g})} onDelete={user.role==="admin"?id=>{ if(confirm("Изтриете госта?")) removeGuest(id); }:null}/>}
+
         </div>
       </div>
 
@@ -430,11 +498,19 @@ export default function App() {
       {modal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}
           onClick={e=>{if(e.target===e.currentTarget)setModal(null);}}>
-          {modal.type==="booking"&&<BookingModal rooms={rooms} bookings={bookings} initial={modal.data} user={user} onSave={b=>{saveBooking(b);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="booking"&&<BookingModal rooms={rooms} bookings={bookings} initial={modal.data} user={user} onSave={b=>saveBooking(b,
+            (existingGuest, newBooking)=>setModal({type:"guestConflict", existingGuest, newBooking})
+          )} onClose={()=>setModal(null)}/>}
+          {modal.type==="guestConflict"&&<GuestConflictModal
+            existingGuest={modal.existingGuest} booking={modal.newBooking}
+            onUseExisting={async b=>{ const fb={...b,guestId:modal.existingGuest.id}; await dbUpsert("bookings",fb); setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]); setModal(null); }}
+            onCreateNew={async b=>{ const ng={id:`g${Date.now()}`,name:b.guestName,phone:b.phone,email:b.email||"",status:"regular",notes:"",createdAt:fmt(new Date())}; await dbUpsert("guests",ng); setGuests(prev=>[...prev,ng]); const fb={...b,guestId:ng.id}; await dbUpsert("bookings",fb); setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]); setModal(null); }}
+            onClose={()=>setModal(null)}/>}
           {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} rooms={rooms} user={user} onEdit={()=>setModal({type:"booking",data:modal.data})} onCancel={b=>{cancelBooking(b);setModal(null);}} onDelete={b=>{removeBooking(b.id);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="room"&&<RoomModal initial={modal.data} rooms={rooms} onSave={r=>{saveRoom(r);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="rate"&&<RateModal initial={modal.data} onSave={r=>{saveRate(r);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="staff"&&<StaffModal users={users} onSave={u=>{saveUser(u);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="guest"&&<GuestModal initial={modal.data} bookings={bookings} rooms={rooms} onSave={g=>{saveGuest(g);setModal(null);}} onClose={()=>setModal(null)}/>}
         </div>
       )}
     </div>
@@ -447,12 +523,12 @@ function LoginScreen({users,onLogin}) {
   const [err,setErr]=useState("");
   function doLogin(){ const u=users.find(u=>u.username===form.username&&u.password===form.password); if(u) onLogin(u); else setErr("Грешно потребителско иmе или парола."); }
   return (
-    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}`}</style>
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',sans-serif"}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}`}</style>
       <div style={{background:"#fff",borderRadius:20,padding:"38px 34px",width:"100%",maxWidth:370,boxShadow:"0 30px 80px rgba(0,0,0,.4)"}}>
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{fontSize:44,marginBottom:8}}>🏨</div>
-          <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:26,fontWeight:700,color:"#1E293B"}}>HotelDesk</h1>
+          <h1 style={{fontFamily:"'Inter',sans-serif",fontSize:26,fontWeight:700,color:"#1E293B"}}>HotelDesk</h1>
           <p style={{fontSize:12,color:"#94A3B8",marginTop:4,letterSpacing:".06em",textTransform:"uppercase"}}>Портал за персонал</p>
         </div>
         {err&&<div style={{background:"#FEE2E2",color:"#991B1B",fontSize:13,padding:"10px 12px",borderRadius:8,marginBottom:14}}>{err}</div>}
@@ -490,7 +566,7 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
     depositAmount:   initial.depositAmount||"",
     depositDate:     initial.depositDate||"",
     fullyPaid:    initial.fullyPaid||false,
-    notes:        initial.notes||"",
+    nationality:  initial.nationality||"",
     createdBy:    initial.createdBy||user.name,
   });
   const [err,setErr]=useState("");
@@ -520,6 +596,7 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
           <Fld label="Телефон"><input value={f.phone} onChange={e=>setF(x=>({...x,phone:e.target.value}))} style={S.input} placeholder="+359…"/></Fld>
           <Fld label="Имейл"><input type="email" value={f.email} onChange={e=>setF(x=>({...x,email:e.target.value}))} style={S.input} placeholder="guest@email.com"/></Fld>
         </div>
+        <Fld label="Националност"><input value={f.nationality} onChange={e=>setF(x=>({...x,nationality:e.target.value}))} style={S.input} placeholder="напр. Германия, Великобритания…"/></Fld>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Fld label="Дата на резервацията"><input type="date" value={f.bookingDate} onChange={e=>setF(x=>({...x,bookingDate:e.target.value}))} style={S.input}/></Fld>
           <Fld label="Източник"><select value={f.source} onChange={e=>setF(x=>({...x,source:e.target.value}))} style={S.input}>{SOURCES.map(s=><option key={s}>{s}</option>)}</select></Fld>
@@ -601,6 +678,7 @@ function ViewBookingModal({booking:b,rooms,user,onEdit,onCancel,onDelete,onClose
     ["Гост",           b.guestName],
     ["Телефон",        b.phone||"—"],
     ["Имейл",          b.email||"—"],
+    ["Националност",   b.nationality||"—"],
     ["Дата на резервацията", b.bookingDate||"—"],
     ["Източник",       b.source||"—"],
     ["Стая",           room?.name||"—"],
@@ -710,19 +788,158 @@ function StaffModal({users,onSave,onClose}) {
   );
 }
 
+// ── GUEST DIRECTORY ───────────────────────────────────────────────────────────
+function GuestDirectory({guests,onEdit,onDelete}) {
+  const [search,setSearch]=useState("");
+  const [statusFilter,setStatusFilter]=useState("all");
+  const filtered=guests.filter(g=>{
+    const matchSearch=!search||g.name.toLowerCase().includes(search.toLowerCase())||g.phone?.includes(search)||g.email?.toLowerCase().includes(search.toLowerCase());
+    const matchStatus=statusFilter==="all"||g.status===statusFilter;
+    return matchSearch&&matchStatus;
+  });
+  return (
+    <div>
+      <div style={{display:"flex",gap:12,marginBottom:18,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Търси по иmе, телефон, имейл…" style={{...S.input,maxWidth:280}}/>
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} style={{...S.input,maxWidth:180}}>
+          <option value="all">Всички статуси</option>
+          {Object.entries(GUEST_STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <span style={{fontSize:13,color:"#94A3B8",marginLeft:"auto"}}>{filtered.length} гости</span>
+      </div>
+      <div style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
+        {filtered.length===0
+          ? <div style={{textAlign:"center",padding:52,color:"#CBD5E1",fontSize:15}}>Няма намерени гости</div>
+          : <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead><tr>{["Гост","Телефон","Имейл","Престои","Изразходвано","Последно посещение","Статус",""].map(h=>(
+                <th key={h} style={{textAlign:"left",padding:"10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0"}}>{h}</th>
+              ))}</tr></thead>
+              <tbody>
+                {filtered.map(g=>{
+                  const st=GUEST_STATUS[g.status]||GUEST_STATUS.regular;
+                  return (
+                    <tr key={g.id} className="rowhov" style={{borderBottom:"1px solid #F1F5F9"}}>
+                      <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{g.name}</td>
+                      <td style={{padding:"12px 14px",color:"#374151"}}>{g.phone||"—"}</td>
+                      <td style={{padding:"12px 14px",color:"#374151"}}>{g.email||"—"}</td>
+                      <td style={{padding:"12px 14px",color:"#374151",textAlign:"center"}}>{g.totalStays||0}</td>
+                      <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>€{g.totalSpent||0}</td>
+                      <td style={{padding:"12px 14px",color:"#374151"}}>{g.lastVisit||"—"}</td>
+                      <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span></td>
+                      <td style={{padding:"12px 14px",display:"flex",gap:6}}>
+                        <button onClick={()=>onEdit(g)} style={S.outlineBtn}>Редактирай</button>
+                        {onDelete&&<button onClick={()=>onDelete(g.id)} style={S.dangerBtn}>×</button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+        }
+      </div>
+    </div>
+  );
+}
+
+// ── GUEST CONFLICT MODAL ──────────────────────────────────────────────────────
+function GuestConflictModal({existingGuest,booking,onUseExisting,onCreateNew,onClose}) {
+  return (
+    <div style={S.modal}>
+      <div style={S.modalHeader}><span style={S.modalTitle}>⚠️ Възможен дубликат</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+      <div style={{padding:"20px"}}>
+        <p style={{fontSize:14,color:"#374151",marginBottom:16}}>Открит е гост с телефон <strong>{booking.phone}</strong>, но с различно иmе:</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+          <div style={{background:"#F8FAFC",borderRadius:10,padding:"14px",border:"1px solid #E2E8F0"}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#94A3B8",marginBottom:6,textTransform:"uppercase"}}>Съществуващ гост</div>
+            <div style={{fontWeight:700,color:"#1E293B"}}>{existingGuest.name}</div>
+            <div style={{fontSize:12,color:"#64748B"}}>{existingGuest.phone}</div>
+          </div>
+          <div style={{background:"#FFF7ED",borderRadius:10,padding:"14px",border:"1px solid #FED7AA"}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#94A3B8",marginBottom:6,textTransform:"uppercase"}}>Ново иmе</div>
+            <div style={{fontWeight:700,color:"#1E293B"}}>{booking.guestName}</div>
+            <div style={{fontSize:12,color:"#64748B"}}>{booking.phone}</div>
+          </div>
+        </div>
+        <p style={{fontSize:13,color:"#64748B",marginBottom:16}}>Изберете как да продължите:</p>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={()=>onUseExisting(booking)} style={{...S.outlineBtn,textAlign:"left",padding:"12px 14px"}}>
+            <div style={{fontWeight:700,color:"#1E293B"}}>Свържи с „{existingGuest.name}"</div>
+            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Тa е същия гост — резервацията ще се добави към неговия профил</div>
+          </button>
+          <button onClick={()=>onCreateNew(booking)} style={{...S.outlineBtn,textAlign:"left",padding:"12px 14px"}}>
+            <div style={{fontWeight:700,color:"#1E293B"}}>Създай нов профил за „{booking.guestName}"</div>
+            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Това е различен гост — ще се създаде отделен профил</div>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── GUEST MODAL ───────────────────────────────────────────────────────────────
+function GuestModal({initial,bookings,rooms,onSave,onClose}) {
+  const [f,setF]=useState({...initial});
+  const gBkgs=bookings.filter(b=>b.guestId===initial.id&&b.status!=="cancelled").sort((a,b)=>a.checkIn<b.checkIn?1:-1);
+  const totalSpent=gBkgs.reduce((s,b)=>s+Number(b.totalPrice||0),0);
+  return (
+    <div style={{...S.modal,maxWidth:560}}>
+      <div style={S.modalHeader}><span style={S.modalTitle}>{f.name}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+      <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Fld label="Иmе"><input value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))} style={S.input}/></Fld>
+          <Fld label="Статус"><select value={f.status} onChange={e=>setF(x=>({...x,status:e.target.value}))} style={S.input}>
+            {Object.entries(GUEST_STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select></Fld>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Fld label="Телефон"><input value={f.phone||""} onChange={e=>setF(x=>({...x,phone:e.target.value}))} style={S.input}/></Fld>
+          <Fld label="Имейл"><input value={f.email||""} onChange={e=>setF(x=>({...x,email:e.target.value}))} style={S.input}/></Fld>
+        </div>
+        <Fld label="Националност"><input value={f.nationality||""} onChange={e=>setF(x=>({...x,nationality:e.target.value}))} style={S.input} placeholder="напр. Германия, Великобритания…"/></Fld>
+        <Fld label="Бележки за госта"><textarea value={f.notes||""} onChange={e=>setF(x=>({...x,notes:e.target.value}))} style={{...S.input,minHeight:70,resize:"vertical"}} placeholder="VIP клиент, предпочитания, важна информация…"/></Fld>
+
+        {/* Stay history */}
+        <div style={{marginTop:8,borderTop:"1px solid #F1F5F9",paddingTop:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <span style={{fontSize:12,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:".06em"}}>История на престоите</span>
+            <span style={{fontSize:12,color:"#94A3B8"}}>{gBkgs.length} престоя · €{totalSpent} общо</span>
+          </div>
+          {gBkgs.length===0
+            ? <div style={{textAlign:"center",padding:"20px 0",color:"#CBD5E1",fontSize:13}}>Няма записани престои</div>
+            : gBkgs.map(b=>{
+                const room=rooms.find(r=>r.id===b.roomId);
+                return (
+                  <div key={b.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F8FAFC",fontSize:13}}>
+                    <div><div style={{fontWeight:600,color:"#1E293B"}}>{room?.name||"—"}</div><div style={{fontSize:11,color:"#94A3B8"}}>{b.checkIn} → {b.checkOut}</div></div>
+                    <div style={{textAlign:"right"}}><div style={{fontWeight:700}}>€{b.totalPrice}</div><div style={{fontSize:11,color:"#94A3B8"}}>{b.source||"—"}</div></div>
+                  </div>
+                );
+              })
+          }
+        </div>
+      </div>
+      <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
+        <button onClick={()=>onSave(f)} style={S.primaryBtn}>Запази</button>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function Fld({label,children}) {
   return <div style={{marginBottom:14}}><div style={{fontSize:12,fontWeight:600,color:"#475569",marginBottom:5,letterSpacing:".03em"}}>{label}</div>{children}</div>;
 }
 
 const S={
-  primaryBtn:{background:"#D97706",color:"#fff",border:"none",borderRadius:9,padding:"8px 16px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"},
-  outlineBtn:{background:"transparent",color:"#1E293B",border:"1px solid #CBD5E1",borderRadius:9,padding:"7px 14px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"},
-  dangerBtn: {background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:9,padding:"7px 14px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"},
+  primaryBtn:{background:"#D97706",color:"#fff",border:"none",borderRadius:9,padding:"8px 16px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"},
+  outlineBtn:{background:"transparent",color:"#1E293B",border:"1px solid #CBD5E1",borderRadius:9,padding:"7px 14px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"},
+  dangerBtn: {background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:9,padding:"7px 14px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"},
   navBtn:    {background:"#F1F5F9",border:"none",borderRadius:8,padding:"7px 14px",fontSize:16,cursor:"pointer",color:"#475569"},
-  input:     {width:"100%",border:"1px solid #E2E8F0",borderRadius:8,padding:"8px 11px",fontSize:14,fontFamily:"'DM Sans',sans-serif",outline:"none",background:"#FAFAFA",color:"#1E293B"},
+  input:     {width:"100%",border:"1px solid #E2E8F0",borderRadius:8,padding:"8px 11px",fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",background:"#FAFAFA",color:"#1E293B"},
   modal:     {background:"#fff",borderRadius:16,width:"100%",maxWidth:480,boxShadow:"0 20px 60px rgba(0,0,0,.25)",maxHeight:"92vh",display:"flex",flexDirection:"column"},
   modalHeader:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:"1px solid #E2E8F0"},
-  modalTitle:{fontFamily:"'Playfair Display',serif",fontSize:17,fontWeight:700,color:"#1E293B"},
+  modalTitle:{fontFamily:"'Inter',sans-serif",fontSize:17,fontWeight:700,color:"#1E293B"},
   closeBtn:  {background:"transparent",border:"none",fontSize:20,cursor:"pointer",color:"#94A3B8",padding:"4px 8px",borderRadius:6},
 };
