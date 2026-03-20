@@ -54,11 +54,83 @@ function fmt(d) { return d instanceof Date?`${d.getFullYear()}-${pad(d.getMonth(
 function addDays(d,n) { const x=new Date(d); x.setDate(x.getDate()+n); return x; }
 function nightsBetween(a,b) { return Math.round((new Date(b)-new Date(a))/86400000); }
 
+// ── CSV Export ────────────────────────────────────────────────────────────────
+// This function takes all bookings + rooms and downloads a .csv file.
+// How it works:
+//   1. Define which columns we want and their human-readable headers
+//   2. For each booking, build a row of values in the same order
+//   3. Escape any value that contains a comma or quote (CSV spec)
+//   4. Join everything into a string, create a temporary link, click it to download
+function exportBookingsToCSV(bookings, rooms) {
+  const headers = [
+    "ID", "Гост", "Телефон", "Имейл", "Националност",
+    "Стая", "Тип стая", "Настаняване", "Напускане", "Нощувки",
+    "Цена/нощ (€)", "Обща сума (€)", "Депозит получен", "Сума депозит (€)",
+    "Дата депозит", "Изцяло платена", "Остава (€)", "Статус",
+    "Дата резервация", "Източник", "Добавена от", "Забележки"
+  ];
+
+  const rows = bookings.map(b => {
+    const room = rooms.find(r => r.id === b.roomId);
+    const nights = b.checkIn && b.checkOut ? nightsBetween(b.checkIn, b.checkOut) : 0;
+    const remaining = b.fullyPaid ? 0 : Math.max(0, (b.totalPrice || 0) - (b.depositReceived ? b.depositAmount || 0 : 0));
+    return [
+      b.id,
+      b.guestName,
+      b.phone || "",
+      b.email || "",
+      b.nationality || "",
+      room?.name || "",
+      room?.type || "",
+      b.checkIn,
+      b.checkOut,
+      nights,
+      b.pricePerNight || "",
+      b.totalPrice || 0,
+      b.depositReceived ? "Да" : "Не",
+      b.depositReceived ? b.depositAmount || 0 : "",
+      b.depositDate || "",
+      b.fullyPaid ? "Да" : "Не",
+      remaining,
+      STATUS_MAP[b.status]?.label || b.status,
+      b.bookingDate || "",
+      b.source || "",
+      b.createdBy || "",
+      b.notes || "",
+    ];
+  });
+
+  // Wrap a cell value in quotes if it contains a comma, quote, or newline
+  const escape = val => {
+    const s = String(val);
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"` // double up any internal quotes
+      : s;
+  };
+
+  const csvContent = [
+    headers.map(escape).join(","),
+    ...rows.map(row => row.map(escape).join(","))
+  ].join("\n");
+
+  // Create an invisible <a> tag, set its href to the CSV data, click it, remove it
+  // This is the standard browser trick for triggering a file download from JavaScript
+  const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" }); // \uFEFF = BOM for Excel UTF-8
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `резервации_${fmt(new Date())}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url); // free the memory
+}
+
 // ── Supabase data operations ──────────────────────────────────────────────────
 async function dbUpsert(table, record) {
   const { error } = await supabase.from(table).upsert(record);
   if (error) console.error(`Error upserting into ${table}:`, error);
-  return !error;
+  return !error; // returns true on success, false on failure
 }
 async function dbDelete(table, id) {
   const { error } = await supabase.from(table).delete().eq("id", id);
@@ -69,6 +141,143 @@ async function dbSelect(table) {
   const { data, error } = await supabase.from(table).select("*");
   if (error) console.error(`Error selecting from ${table}:`, error);
   return data || [];
+}
+
+// ── Toast component ───────────────────────────────────────────────────────────
+// A small notification bar that appears at the top-right, then fades away.
+// Props:
+//   toasts: array of { id, message, type } where type is "success" | "error"
+function ToastContainer({ toasts }) {
+  if (!toasts.length) return null;
+  return (
+    <div style={{ position:"fixed", top:16, right:16, zIndex:9999, display:"flex", flexDirection:"column", gap:8, pointerEvents:"none" }}>
+      {toasts.map(t => (
+        <div key={t.id} style={{
+          background: t.type === "error" ? "#FEE2E2" : "#DCFCE7",
+          color:      t.type === "error" ? "#991B1B" : "#166534",
+          border:     `1px solid ${t.type === "error" ? "#FECACA" : "#BBF7D0"}`,
+          borderRadius: 10,
+          padding: "11px 18px",
+          fontSize: 13,
+          fontWeight: 600,
+          boxShadow: "0 4px 16px rgba(0,0,0,.12)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          animation: "toastIn .2s ease",
+          fontFamily: "'Inter', sans-serif",
+        }}>
+          <span>{t.type === "error" ? "✕" : "✓"}</span>
+          {t.message}
+        </div>
+      ))}
+      {/* Inline keyframe — avoids needing a separate CSS file */}
+      <style>{`@keyframes toastIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }`}</style>
+    </div>
+  );
+}
+
+// ── Nationality list ──────────────────────────────────────────────────────────
+// A static list of countries in Bulgarian. Kept here near the top so it's easy
+// to extend later (e.g. add "Непознато" or custom entries).
+const NATIONALITIES = [
+  "Австрия","Австралия","Азербайджан","Албания","Алжир","Аржентина","Армения",
+  "Беларус","Белгия","Босна и Херцеговина","Бразилия","България",
+  "Великобритания","Венецуела","Виетнам","Гватемала","Германия","Гърция",
+  "Дания","Египет","Естония","Израел","Индия","Индонезия","Ирак","Иран","Ирландия",
+  "Испания","Италия","Йордания","Казахстан","Канада","Катар","Китай","Кипър",
+  "Колумбия","Косово","Латвия","Ливан","Литва","Люксембург","Македония",
+  "Малайзия","Малта","Мароко","Мексико","Молдова","Монтенегро",
+  "Нидерландия","Норвегия","ОАЕ","Пакистан","Полша","Португалия","Румъния",
+  "Русия","САЩ","Саудитска Арабия","Сингапур","Словакия","Словения","Сърбия",
+  "Тайланд","Тунис","Турция","Украйна","Унгария","Филипини","Финландия",
+  "Франция","Хърватия","Черна гора","Чехия","Чили","Швейцария","Швеция",
+  "Япония","Друго",
+];
+
+// ── NationalitySelect ─────────────────────────────────────────────────────────
+// A searchable dropdown for nationality.
+// How it works:
+//   - Shows a text input. When focused, a dropdown list appears below it.
+//   - The list is filtered in real-time as the user types (case-insensitive).
+//   - Clicking an option sets the value and closes the dropdown.
+//   - Clicking outside also closes the dropdown (via a mousedown listener on document).
+//   - The user can also just type a free-form value if their country isn't listed.
+function NationalitySelect({ value, onChange, inputStyle }) {
+  const [query, setQuery]   = useState(value || "");
+  const [open,  setOpen]    = useState(false);
+  const ref = useRef();
+
+  // Keep the text box in sync if the parent resets the value (e.g. editing an existing booking)
+  useEffect(() => { setQuery(value || ""); }, [value]);
+
+  // Close dropdown when clicking anywhere outside this component
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const filtered = NATIONALITIES.filter(n =>
+    n.toLowerCase().includes(query.toLowerCase())
+  );
+
+  function select(nation) {
+    setQuery(nation);
+    onChange(nation);
+    setOpen(false);
+  }
+
+  function handleInput(e) {
+    setQuery(e.target.value);
+    onChange(e.target.value); // allow free-form entry too
+    setOpen(true);
+  }
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <input
+        value={query}
+        onChange={handleInput}
+        onFocus={() => setOpen(true)}
+        style={{ ...inputStyle, paddingRight: 28 }}
+        placeholder="Търси или въведи националност…"
+        autoComplete="off"
+      />
+      {/* Small arrow indicator */}
+      <span style={{
+        position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
+        fontSize:10, color:"#94A3B8", pointerEvents:"none"
+      }}>{open ? "▲" : "▼"}</span>
+
+      {open && filtered.length > 0 && (
+        <div style={{
+          position:"absolute", top:"calc(100% + 3px)", left:0, right:0, zIndex:200,
+          background:"#fff", border:"1px solid #E2E8F0", borderRadius:8,
+          boxShadow:"0 8px 24px rgba(0,0,0,.12)", maxHeight:220, overflowY:"auto",
+        }}>
+          {filtered.map(n => (
+            <div
+              key={n}
+              onMouseDown={e => { e.preventDefault(); select(n); }} // preventDefault keeps input focused until we're done
+              style={{
+                padding:"8px 12px", fontSize:13, cursor:"pointer",
+                color: n === value ? "#D97706" : "#1E293B",
+                fontWeight: n === value ? 700 : 400,
+                background: n === value ? "#FFF7ED" : "transparent",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = n === value ? "#FFF7ED" : "#F8FAFC"}
+              onMouseLeave={e => e.currentTarget.style.background = n === value ? "#FFF7ED" : "transparent"}
+            >
+              {n}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Multi-select dropdown ─────────────────────────────────────────────────────
@@ -140,6 +349,22 @@ export default function App() {
   const [calFilter,  setCalFilter]  = useState([]);
   const [bkgFilter,  setBkgFilter]  = useState([]);
 
+  // ── Toast state ─────────────────────────────────────────────────────────────
+  // toasts is an array so multiple toasts can stack if actions happen quickly.
+  // Each toast has: { id (unique number), message (string), type ("success"|"error") }
+  const [toasts, setToasts] = useState([]);
+
+  // showToast adds a toast and automatically removes it after 3 seconds.
+  // The "prev" pattern ensures we never accidentally lose a toast that was
+  // added at almost the same millisecond.
+  function showToast(message, type = "success") {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
+  }
+
   // Load all data from Supabase on mount
   useEffect(()=>{
     (async()=>{
@@ -155,18 +380,16 @@ export default function App() {
       if (!rt.length) { await Promise.all(DEFAULT_RATES.map(x => dbUpsert("rates", x))); setRates(DEFAULT_RATES); } else { setRates(rt); }
 
       // ── Guest migration ────────────────────────────────────────────
-      // For each booking without a guestId, auto-create/link a guest profile
       let guestList = [...g];
       const updatedBookings = [...b];
       const bookingsWithoutGuest = b.filter(bk => !bk.guestId && bk.phone);
       for (const bk of bookingsWithoutGuest) {
         const phone = bk.phone.trim();
-        // Check both already-existing guests AND ones created earlier in this same loop
         let existing = guestList.find(gx => gx.phone?.trim() === phone);
         if (!existing) {
           existing = { id:`g${Date.now()}_${Math.random().toString(36).slice(2,6)}`, name:bk.guestName, phone, email:bk.email||"", nationality:bk.nationality||"", status:"regular", notes:"", createdAt:bk.bookingDate||fmt(new Date()) };
           await dbUpsert("guests", existing);
-          guestList.push(existing); // add to list immediately so next iteration finds it
+          guestList.push(existing);
         }
         const updated = { ...bk, guestId: existing.id };
         await dbUpsert("bookings", updated);
@@ -182,30 +405,45 @@ export default function App() {
 
   // ── Data helpers ─────────────────────────────────────────────────────────────
   async function saveUser(u) {
-    await dbUpsert("users", u);
-    setUsers(prev => [...prev, u]);
+    const ok = await dbUpsert("users", u);
+    if (ok) {
+      setUsers(prev => [...prev, u]);
+      showToast("Служителят е добавен успешно.");
+    } else {
+      showToast("Грешка при запис.", "error");
+    }
   }
   async function removeUser(id) {
     await dbDelete("users", id);
     setUsers(prev => prev.filter(x => x.id !== id));
   }
   async function saveRoom(r) {
-    await dbUpsert("rooms", r);
-    setRooms(prev => prev.find(x=>x.id===r.id) ? prev.map(x=>x.id===r.id?r:x) : [...prev, r]);
+    const ok = await dbUpsert("rooms", r);
+    if (ok) {
+      setRooms(prev => prev.find(x=>x.id===r.id) ? prev.map(x=>x.id===r.id?r:x) : [...prev, r]);
+      showToast("Стаята е записана успешно.");
+    } else {
+      showToast("Грешка при запис на стаята.", "error");
+    }
   }
   async function removeRoom(id) {
     await dbDelete("rooms", id);
     setRooms(prev => prev.filter(x => x.id !== id));
   }
   async function saveGuest(g) {
-    await dbUpsert("guests", g);
-    setGuests(prev => prev.find(x=>x.id===g.id) ? prev.map(x=>x.id===g.id?g:x) : [...prev, g]);
+    const ok = await dbUpsert("guests", g);
+    if (ok) {
+      setGuests(prev => prev.find(x=>x.id===g.id) ? prev.map(x=>x.id===g.id?g:x) : [...prev, g]);
+      showToast("Профилът на госта е записан.");
+    } else {
+      showToast("Грешка при запис на госта.", "error");
+    }
   }
   async function removeGuest(id) {
     await dbDelete("guests", id);
     setGuests(prev => prev.filter(x => x.id !== id));
   }
-  // Recalculates and persists totalSpent + totalStays on a guest record
+
   async function updateGuestStats(guestId, updatedBookings) {
     const gBkgs = updatedBookings.filter(b => b.guestId === guestId && b.status !== "cancelled");
     const totalSpent = gBkgs.reduce((s, b) => s + Number(b.totalPrice || 0), 0);
@@ -219,7 +457,9 @@ export default function App() {
     }));
   }
 
-  // Smart saveBooking: auto-creates or links guest profile, flags conflicts
+  // saveBooking now returns a boolean so the call site knows whether to close the modal.
+  // Why? The onConflict path needs to interrupt the save and show a different modal,
+  // so we return false in that case and let the conflict modal handle the rest.
   async function saveBooking(b, onConflict) {
     let guestId = b.guestId;
     if (b.phone) {
@@ -227,7 +467,7 @@ export default function App() {
       const existing = guests.find(g => g.phone?.trim() === phone);
       if (existing) {
         if (existing.name.trim().toLowerCase() !== b.guestName.trim().toLowerCase()) {
-          if (onConflict) { onConflict(existing, b); return; }
+          if (onConflict) { onConflict(existing, b); return false; }
         }
         guestId = existing.id;
         if (b.nationality && b.nationality !== existing.nationality) {
@@ -243,27 +483,52 @@ export default function App() {
       }
     }
     const finalBooking = { ...b, guestId };
-    await dbUpsert("bookings", finalBooking);
-    const updatedBookings = bookings.find(x=>x.id===finalBooking.id)
-      ? bookings.map(x=>x.id===finalBooking.id?finalBooking:x)
-      : [...bookings, finalBooking];
+    const ok = await dbUpsert("bookings", finalBooking);
+    if (!ok) {
+      showToast("Грешка при запис на резервацията.", "error");
+      return false;
+    }
+    const isNew = !bookings.find(x => x.id === finalBooking.id);
+    const updatedBookings = isNew
+      ? [...bookings, finalBooking]
+      : bookings.map(x => x.id === finalBooking.id ? finalBooking : x);
     setBookings(updatedBookings);
     if (guestId) await updateGuestStats(guestId, updatedBookings);
+    showToast(isNew ? "Резервацията е създадена успешно." : "Резервацията е обновена успешно.");
+    return true; // signal success so the modal can close
   }
+
   async function cancelBooking(b) {
     const updated = { ...b, status: "cancelled" };
-    await dbUpsert("bookings", updated);
-    const updatedBookings = bookings.map(x => x.id === b.id ? updated : x);
-    setBookings(updatedBookings);
-    if (b.guestId) await updateGuestStats(b.guestId, updatedBookings);
+    const ok = await dbUpsert("bookings", updated);
+    if (ok) {
+      const updatedBookings = bookings.map(x => x.id === b.id ? updated : x);
+      setBookings(updatedBookings);
+      if (b.guestId) await updateGuestStats(b.guestId, updatedBookings);
+      showToast("Резервацията е анулирана.");
+    } else {
+      showToast("Грешка при анулиране.", "error");
+    }
   }
+
   async function removeBooking(id) {
-    await dbDelete("bookings", id);
-    setBookings(prev => prev.filter(x => x.id !== id));
+    const ok = await dbDelete("bookings", id);
+    if (ok) {
+      setBookings(prev => prev.filter(x => x.id !== id));
+      showToast("Резервацията е изтрита.");
+    } else {
+      showToast("Грешка при изтриване.", "error");
+    }
   }
+
   async function saveRate(r) {
-    await dbUpsert("rates", r);
-    setRates(prev => prev.find(x=>x.id===r.id) ? prev.map(x=>x.id===r.id?r:x) : [...prev, r]);
+    const ok = await dbUpsert("rates", r);
+    if (ok) {
+      setRates(prev => prev.find(x=>x.id===r.id) ? prev.map(x=>x.id===r.id?r:x) : [...prev, r]);
+      showToast("Тарифата е записана.");
+    } else {
+      showToast("Грешка при запис на тарифата.", "error");
+    }
   }
   async function removeRate(id) {
     await dbDelete("rates", id);
@@ -286,7 +551,32 @@ export default function App() {
 
   return (
     <div style={{display:"flex",height:"100vh",fontFamily:"'Inter',sans-serif",background:"#F8FAFC",overflow:"hidden"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}body{font-family:'Inter',sans-serif;}::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}input,select,textarea{font-family:inherit;}.nbtn:hover{background:rgba(255,255,255,.08)!important;color:#E2E8F0!important;}.rowhov:hover td{background:#F8FAFC!important;}.tlc:hover{background:#EFF6FF!important;}`}</style>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0;}
+        html,body,#root{width:100%;height:100%;}
+        body{font-family:'Inter',sans-serif;}
+        ::-webkit-scrollbar{width:6px;height:6px;}
+        ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}
+        input,select,textarea{font-family:inherit;}
+        .nbtn:hover{background:rgba(255,255,255,.08)!important;color:#E2E8F0!important;}
+        .rowhov:hover td{background:#F8FAFC!important;}
+        .tlc:hover{background:#EFF6FF!important;}
+
+        /* Fix 1: Date input calendar icon — force light color-scheme so the
+           browser renders the calendar icon in dark gray instead of white.
+           color-scheme controls whether the browser's native widgets (date pickers,
+           scrollbars, checkboxes) render in light or dark mode. */
+        input[type="date"] { color-scheme: light; }
+
+        /* Fix 2: Checkboxes — same root cause. The dark sidebar sets a dark
+           color-scheme on the whole page which propagates to all native inputs.
+           Resetting it to "light" on checkboxes gives them a white background. */
+        input[type="checkbox"] { color-scheme: light; }
+      `}</style>
+
+      {/* Toast notifications — rendered on top of everything */}
+      <ToastContainer toasts={toasts} />
 
       {/* SIDEBAR */}
       <aside style={{width:220,background:"#1E293B",display:"flex",flexDirection:"column",flexShrink:0}}>
@@ -318,6 +608,16 @@ export default function App() {
         <header style={{height:54,background:"#fff",borderBottom:"1px solid #E2E8F0",display:"flex",alignItems:"center",padding:"0 22px",gap:14,flexShrink:0}}>
           <h1 style={{fontFamily:"'Inter',sans-serif",fontSize:19,fontWeight:700,color:"#1E293B",flex:1}}>{navItems.find(n=>n.id===view)?.label}</h1>
           {(view==="calendar"||view==="bookings") && <button onClick={()=>setModal({type:"booking",data:{}})} style={S.primaryBtn}>+ Нова резервация</button>}
+          {/* CSV Export button — only shown on the Bookings view */}
+          {view==="bookings" && (
+            <button
+              onClick={() => exportBookingsToCSV(bookings, rooms)}
+              style={{ ...S.outlineBtn, display:"flex", alignItems:"center", gap:6 }}
+              title="Изтегли всички резервации като CSV файл"
+            >
+              ↓ Експорт CSV
+            </button>
+          )}
           {view==="rooms" && <button onClick={()=>setModal({type:"room",data:{}})} style={S.primaryBtn}>+ Добави стая</button>}
           {view==="rates" && <button onClick={()=>setModal({type:"rate",data:{}})} style={S.primaryBtn}>+ Добави тарифа</button>}
           {view==="staff"&&user.role==="admin" && <button onClick={()=>setModal({type:"staff",data:{}})} style={S.primaryBtn}>+ Добави служител</button>}
@@ -498,15 +798,49 @@ export default function App() {
       {modal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}
           onClick={e=>{if(e.target===e.currentTarget)setModal(null);}}>
-          {modal.type==="booking"&&<BookingModal rooms={rooms} bookings={bookings} initial={modal.data} user={user} onSave={b=>saveBooking(b,
-            (existingGuest, newBooking)=>setModal({type:"guestConflict", existingGuest, newBooking})
-          )} onClose={()=>setModal(null)}/>}
+          {modal.type==="booking"&&<BookingModal rooms={rooms} bookings={bookings} initial={modal.data} user={user}
+            onSave={async b=>{
+              // saveBooking returns true on success, false if a conflict modal was triggered
+              // So we only close this modal when the save actually completed.
+              const success = await saveBooking(b,
+                (existingGuest, newBooking)=>setModal({type:"guestConflict", existingGuest, newBooking})
+              );
+              if (success) setModal(null);
+            }}
+            onClose={()=>setModal(null)}/>}
           {modal.type==="guestConflict"&&<GuestConflictModal
             existingGuest={modal.existingGuest} booking={modal.newBooking}
-            onUseExisting={async b=>{ const fb={...b,guestId:modal.existingGuest.id}; await dbUpsert("bookings",fb); setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]); setModal(null); }}
-            onCreateNew={async b=>{ const ng={id:`g${Date.now()}`,name:b.guestName,phone:b.phone,email:b.email||"",status:"regular",notes:"",createdAt:fmt(new Date())}; await dbUpsert("guests",ng); setGuests(prev=>[...prev,ng]); const fb={...b,guestId:ng.id}; await dbUpsert("bookings",fb); setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]); setModal(null); }}
+            onUseExisting={async b=>{
+              const fb={...b,guestId:modal.existingGuest.id};
+              const ok = await dbUpsert("bookings",fb);
+              if (ok) {
+                setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]);
+                showToast("Резервацията е свързана с existing госта.");
+              } else {
+                showToast("Грешка при запис.", "error");
+              }
+              setModal(null);
+            }}
+            onCreateNew={async b=>{
+              const ng={id:`g${Date.now()}`,name:b.guestName,phone:b.phone,email:b.email||"",status:"regular",notes:"",createdAt:fmt(new Date())};
+              await dbUpsert("guests",ng);
+              setGuests(prev=>[...prev,ng]);
+              const fb={...b,guestId:ng.id};
+              const ok = await dbUpsert("bookings",fb);
+              if (ok) {
+                setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]);
+                showToast("Нов профил създаден и резервацията е записана.");
+              } else {
+                showToast("Грешка при запис.", "error");
+              }
+              setModal(null);
+            }}
             onClose={()=>setModal(null)}/>}
-          {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} rooms={rooms} user={user} onEdit={()=>setModal({type:"booking",data:modal.data})} onCancel={b=>{cancelBooking(b);setModal(null);}} onDelete={b=>{removeBooking(b.id);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} rooms={rooms} user={user}
+            onEdit={()=>setModal({type:"booking",data:modal.data})}
+            onCancel={b=>{cancelBooking(b);setModal(null);}}
+            onDelete={b=>{removeBooking(b.id);setModal(null);}}
+            onClose={()=>setModal(null)}/>}
           {modal.type==="room"&&<RoomModal initial={modal.data} rooms={rooms} onSave={r=>{saveRoom(r);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="rate"&&<RateModal initial={modal.data} onSave={r=>{saveRate(r);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="staff"&&<StaffModal users={users} onSave={u=>{saveUser(u);setModal(null);}} onClose={()=>setModal(null)}/>}
@@ -590,19 +924,23 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
       <div style={S.modalHeader}><span style={S.modalTitle}>{isEdit?"Редактирай резервация":"Нова резервация"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
       <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
 
-        {/* Guest info */}
         <Fld label="Иmе на госта"><input value={f.guestName} onChange={e=>setF(x=>({...x,guestName:e.target.value}))} style={S.input} placeholder="Пълно иmе"/></Fld>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Fld label="Телефон"><input value={f.phone} onChange={e=>setF(x=>({...x,phone:e.target.value}))} style={S.input} placeholder="+359…"/></Fld>
           <Fld label="Имейл"><input type="email" value={f.email} onChange={e=>setF(x=>({...x,email:e.target.value}))} style={S.input} placeholder="guest@email.com"/></Fld>
         </div>
-        <Fld label="Националност"><input value={f.nationality} onChange={e=>setF(x=>({...x,nationality:e.target.value}))} style={S.input} placeholder="напр. Германия, Великобритания…"/></Fld>
+        <Fld label="Националност">
+          <NationalitySelect
+            value={f.nationality}
+            onChange={v => setF(x=>({...x, nationality:v}))}
+            inputStyle={S.input}
+          />
+        </Fld>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Fld label="Дата на резервацията"><input type="date" value={f.bookingDate} onChange={e=>setF(x=>({...x,bookingDate:e.target.value}))} style={S.input}/></Fld>
           <Fld label="Източник"><select value={f.source} onChange={e=>setF(x=>({...x,source:e.target.value}))} style={S.input}>{SOURCES.map(s=><option key={s}>{s}</option>)}</select></Fld>
         </div>
 
-        {/* Room & dates */}
         <Fld label="Стая"><select value={f.roomId} onChange={e=>setF(x=>({...x,roomId:e.target.value}))} style={S.input}>{rooms.map(r=><option key={r.id} value={r.id}>{r.name} — {r.type}</option>)}</select></Fld>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Fld label="Настаняване"><input type="date" value={f.checkIn} onChange={e=>setF(x=>({...x,checkIn:e.target.value}))} style={S.input}/></Fld>
@@ -610,7 +948,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
         </div>
         <Fld label="Цена на нощ (€)"><input type="number" min="1" value={f.pricePerNight} onChange={e=>setF(x=>({...x,pricePerNight:e.target.value}))} style={S.input} placeholder="напр. 90"/></Fld>
 
-        {/* Live totals summary */}
         {nights>0&&Number(f.pricePerNight)>0&&(
           <div style={{background:"#EFF6FF",borderRadius:10,padding:"12px 14px",marginBottom:14,border:"1px solid #BFDBFE"}}>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#1D4ED8",marginBottom:4}}>
@@ -632,7 +969,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
           <option value="cancelled">Анулирана</option>
         </select></Fld>
 
-        {/* Payment */}
         <div style={{background:"#F8FAFC",borderRadius:10,padding:"14px",marginBottom:14,border:"1px solid #E2E8F0"}}>
           <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:8}}>
             <input type="checkbox" checked={f.fullyPaid} onChange={e=>setF(x=>({...x,fullyPaid:e.target.checked,depositReceived:e.target.checked?x.depositReceived:x.depositReceived}))} style={{width:16,height:16,accentColor:"#059669"}}/>
@@ -650,7 +986,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
           )}
         </div>
 
-        {/* Remaining amount — always visible once total is known */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderRadius:10,marginBottom:14,border:`2px solid ${remaining===0?"#BBF7D0":"#FECACA"}`,background:remaining===0?"#F0FDF4":"#FFF5F5"}}>
           <span style={{fontWeight:700,fontSize:14,color:remaining===0?"#166534":"#991B1B"}}>Остава за плащане</span>
           <span style={{fontWeight:800,fontSize:18,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>
@@ -669,6 +1004,8 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
 }
 
 // ── VIEW BOOKING MODAL ────────────────────────────────────────────────────────
+// CHANGE: Delete button is now visible to ALL users (not just admins).
+// The reasoning: staff need to be able to delete test/erroneous bookings too.
 function ViewBookingModal({booking:b,rooms,user,onEdit,onCancel,onDelete,onClose}) {
   const room=rooms.find(r=>r.id===b.roomId);
   const nights=nightsBetween(b.checkIn,b.checkOut);
@@ -708,7 +1045,8 @@ function ViewBookingModal({booking:b,rooms,user,onEdit,onCancel,onDelete,onClose
       </div>
       <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
         {b.status!=="cancelled"&&<button onClick={()=>onCancel(b)} style={S.outlineBtn}>Анулирай</button>}
-        {user.role==="admin"&&<button onClick={()=>onDelete(b)} style={S.dangerBtn}>Изтрий</button>}
+        {/* Delete is now available to all users, not just admins */}
+        <button onClick={()=>{ if(confirm("Изтриете тази резервация? Действието е необратимо.")) onDelete(b); }} style={S.dangerBtn}>Изтрий</button>
         <button onClick={onEdit} style={S.primaryBtn}>Редактирай</button>
       </div>
     </div>
@@ -898,7 +1236,6 @@ function GuestModal({initial,bookings,rooms,onSave,onClose}) {
         <Fld label="Националност"><input value={f.nationality||""} onChange={e=>setF(x=>({...x,nationality:e.target.value}))} style={S.input} placeholder="напр. Германия, Великобритания…"/></Fld>
         <Fld label="Бележки за госта"><textarea value={f.notes||""} onChange={e=>setF(x=>({...x,notes:e.target.value}))} style={{...S.input,minHeight:70,resize:"vertical"}} placeholder="VIP клиент, предпочитания, важна информация…"/></Fld>
 
-        {/* Stay history */}
         <div style={{marginTop:8,borderTop:"1px solid #F1F5F9",paddingTop:14}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <span style={{fontSize:12,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:".06em"}}>История на престоите</span>
