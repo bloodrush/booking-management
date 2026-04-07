@@ -35,11 +35,7 @@ const DEFAULT_ROOMS = [
   { id:"r14", name:"Апарт. 1", type:"Апартамент", color:PALETTE[13] },
   { id:"r15", name:"Апарт. 2", type:"Апартамент", color:PALETTE[14] },
 ];
-const DEFAULT_RATES = [
-  { id:"sr1", name:"Лятно върхово натоварване", startDate:"2025-07-01", endDate:"2025-08-31", multiplier:1.4 },
-  { id:"sr2", name:"Коледа и Нова година",       startDate:"2025-12-20", endDate:"2025-12-31", multiplier:1.6 },
-  { id:"sr3", name:"Нисък сезон",                startDate:"2025-11-01", endDate:"2025-11-30", multiplier:0.8 },
-];
+
 const BG_MONTHS = ["Януари","Февруари","Март","Април","Май","Юни","Юли","Август","Септември","Октомври","Ноември","Декември"];
 const GUEST_STATUS = {
   regular:     { label:"Редовен",      bg:"#EFF6FF", color:"#1D4ED8" },
@@ -339,7 +335,7 @@ export default function App() {
   const [users,    setUsers]    = useState([]);
   const [rooms,    setRooms]    = useState([]);
   const [bookings, setBookings] = useState([]);
-  const [rates,    setRates]    = useState([]);
+
   const [guests,   setGuests]   = useState([]);
   const [view, setView] = useState(()=>localStorage.getItem("hoteldesk_view")||"calendar");
   function navigate(v){ setView(v); localStorage.setItem("hoteldesk_view",v); }
@@ -368,16 +364,14 @@ export default function App() {
   // Load all data from Supabase on mount
   useEffect(()=>{
     (async()=>{
-      const [u, r, b, rt, g] = await Promise.all([
+      const [u, r, b, g] = await Promise.all([
         dbSelect("users"),
         dbSelect("rooms"),
         dbSelect("bookings"),
-        dbSelect("rates"),
         dbSelect("guests"),
       ]);
       if (!u.length) { await Promise.all(DEFAULT_USERS.map(x => dbUpsert("users", x))); setUsers(DEFAULT_USERS); } else { setUsers(u); }
       if (!r.length) { await Promise.all(DEFAULT_ROOMS.map(x => dbUpsert("rooms", x))); setRooms(DEFAULT_ROOMS); } else { setRooms(r); }
-      if (!rt.length) { await Promise.all(DEFAULT_RATES.map(x => dbUpsert("rates", x))); setRates(DEFAULT_RATES); } else { setRates(rt); }
 
       // ── Guest migration ────────────────────────────────────────────
       let guestList = [...g];
@@ -446,8 +440,16 @@ export default function App() {
 
   async function updateGuestStats(guestId, updatedBookings) {
     const gBkgs = updatedBookings.filter(b => b.guestId === guestId && b.status !== "cancelled");
+    // totalSpent = sum of every room's price (each booking record holds its own room price)
     const totalSpent = gBkgs.reduce((s, b) => s + Number(b.totalPrice || 0), 0);
-    const totalStays = gBkgs.length;
+    // totalStays = number of unique reservations — a multi-room group counts as ONE stay
+    const seenGroups = new Set();
+    const totalStays = gBkgs.filter(b => {
+      if (!b.groupId) return true;
+      if (seenGroups.has(b.groupId)) return false;
+      seenGroups.add(b.groupId);
+      return true;
+    }).length;
     const lastVisit = gBkgs.map(b => b.checkIn).sort().reverse()[0] || "";
     setGuests(prev => prev.map(g => {
       if (g.id !== guestId) return g;
@@ -457,83 +459,134 @@ export default function App() {
     }));
   }
 
-  // saveBooking now returns a boolean so the call site knows whether to close the modal.
-  // Why? The onConflict path needs to interrupt the save and show a different modal,
-  // so we return false in that case and let the conflict modal handle the rest.
-  async function saveBooking(b, onConflict) {
-    let guestId = b.guestId;
-    if (b.phone) {
-      const phone = b.phone.trim();
+  // ── saveGroupBookingDirect ───────────────────────────────────────────────────
+  // Called after the guest conflict modal resolves — guestId is already known,
+  // so we skip guest resolution and go straight to writing the booking records.
+  async function saveGroupBookingDirect(shared, roomsList, guestId) {
+    const groupId = roomsList.length > 1 ? (shared.groupId || `grp_${Date.now()}`) : null;
+    const depositAmount = shared.depositReceived ? Number(shared.depositAmount) || 0 : 0;
+    // Dates are now shared — nights is the same for every room in the group
+    const nights = shared.checkIn&&shared.checkOut ? nightsBetween(shared.checkIn, shared.checkOut) : 0;
+    const grandTotal = roomsList.reduce((s, r) => {
+      return s + (nights > 0 ? Math.round(nights * Number(r.pricePerNight)) : 0);
+    }, 0);
+    const remaining = shared.fullyPaid ? 0 : Math.max(0, grandTotal - depositAmount);
+
+    const savedRecords = [];
+    for (const room of roomsList) {
+      const roomTotal = nights > 0 ? Math.round(nights * Number(room.pricePerNight)) : 0;
+      const record = {
+        id: room.bookingId,
+        guestId,
+        guestName:       shared.guestName,
+        phone:           shared.phone,
+        email:           shared.email,
+        bookingDate:     shared.bookingDate,
+        source:          shared.source,
+        nationality:     shared.nationality,
+        status:          shared.status,
+        depositReceived: shared.depositReceived,
+        depositAmount,
+        depositDate:     shared.depositDate,
+        fullyPaid:       shared.fullyPaid,
+        notes:           shared.notes,
+        createdBy:       shared.createdBy,
+        groupId,
+        roomId:          room.roomId,
+        checkIn:         shared.checkIn,
+        checkOut:        shared.checkOut,
+        pricePerNight:   Number(room.pricePerNight),
+        totalPrice:      roomTotal,
+        remaining:       roomsList.length === 1 ? remaining : 0,
+      };
+      const ok = await dbUpsert("bookings", record);
+      if (!ok) { showToast("Грешка при запис на резервацията.", "error"); return false; }
+      savedRecords.push(record);
+    }
+
+    // Merge saved records back into the bookings state array
+    let updated = [...bookings];
+    for (const rec of savedRecords) {
+      const exists = updated.findIndex(x => x.id === rec.id);
+      if (exists !== -1) updated[exists] = rec; else updated = [...updated, rec];
+    }
+    setBookings(updated);
+    if (guestId) await updateGuestStats(guestId, updated);
+    return true;
+  }
+
+  // ── saveGroupBooking ─────────────────────────────────────────────────────────
+  // Main save function called by the booking modal.
+  //   shared   — the fields common to the whole reservation (guest info, status, deposit…)
+  //   roomsList — array of { bookingId, roomId, checkIn, checkOut, pricePerNight }
+  //   onConflict — called when a phone number matches a different guest name
+  //
+  // Returns true on success (so the modal knows to close), false on failure/conflict.
+  async function saveGroupBooking(shared, roomsList, onConflict) {
+    let guestId = shared.guestId;
+
+    // ── Guest resolution (same logic as before, just once per reservation) ──
+    if (shared.phone) {
+      const phone = shared.phone.trim();
       const existing = guests.find(g => g.phone?.trim() === phone);
       if (existing) {
-        if (existing.name.trim().toLowerCase() !== b.guestName.trim().toLowerCase()) {
-          if (onConflict) { onConflict(existing, b); return false; }
+        if (existing.name.trim().toLowerCase() !== shared.guestName.trim().toLowerCase()) {
+          // Name mismatch → let the conflict modal decide, then return false here
+          if (onConflict) { onConflict(existing, shared, roomsList); return false; }
         }
         guestId = existing.id;
-        if (b.nationality && b.nationality !== existing.nationality) {
-          const updatedGuest = { ...existing, nationality: b.nationality };
+        // If nationality has been updated for this booking, persist it on the guest too
+        if (shared.nationality && shared.nationality !== existing.nationality) {
+          const updatedGuest = { ...existing, nationality: shared.nationality };
           await dbUpsert("guests", updatedGuest);
           setGuests(prev => prev.map(g => g.id === existing.id ? updatedGuest : g));
         }
       } else {
-        const newGuest = { id:`g${Date.now()}`, name:b.guestName, phone, email:b.email||"", nationality:b.nationality||"", status:"regular", notes:"", totalSpent:0, totalStays:0, lastVisit:"", createdAt:fmt(new Date()) };
+        // Brand new guest — create a profile automatically
+        const newGuest = {
+          id: `g${Date.now()}`, name: shared.guestName, phone,
+          email: shared.email||"", nationality: shared.nationality||"",
+          status: "regular", notes: "", totalSpent: 0, totalStays: 0,
+          lastVisit: "", createdAt: fmt(new Date()),
+        };
         await dbUpsert("guests", newGuest);
         setGuests(prev => [...prev, newGuest]);
         guestId = newGuest.id;
       }
     }
-    const finalBooking = { ...b, guestId };
-    const ok = await dbUpsert("bookings", finalBooking);
-    if (!ok) {
-      showToast("Грешка при запис на резервацията.", "error");
-      return false;
-    }
-    const isNew = !bookings.find(x => x.id === finalBooking.id);
-    const updatedBookings = isNew
-      ? [...bookings, finalBooking]
-      : bookings.map(x => x.id === finalBooking.id ? finalBooking : x);
-    setBookings(updatedBookings);
-    if (guestId) await updateGuestStats(guestId, updatedBookings);
+
+    const isNew = !bookings.find(x => x.id === roomsList[0].bookingId);
+    const ok = await saveGroupBookingDirect(shared, roomsList, guestId);
+    if (!ok) return false;
     showToast(isNew ? "Резервацията е създадена успешно." : "Резервацията е обновена успешно.");
-    return true; // signal success so the modal can close
+    return true;
   }
 
   async function cancelBooking(b) {
-    const updated = { ...b, status: "cancelled" };
-    const ok = await dbUpsert("bookings", updated);
-    if (ok) {
-      const updatedBookings = bookings.map(x => x.id === b.id ? updated : x);
-      setBookings(updatedBookings);
-      if (b.guestId) await updateGuestStats(b.guestId, updatedBookings);
-      showToast("Резервацията е анулирана.");
-    } else {
-      showToast("Грешка при анулиране.", "error");
-    }
+    // If this booking belongs to a group, cancel every room in that group
+    const toCancel = b.groupId
+      ? bookings.filter(x => x.groupId === b.groupId)
+      : [b];
+    const updates = toCancel.map(x => ({ ...x, status: "cancelled" }));
+    await Promise.all(updates.map(u => dbUpsert("bookings", u)));
+    const updatedBookings = bookings.map(x => updates.find(u => u.id === x.id) || x);
+    setBookings(updatedBookings);
+    if (b.guestId) await updateGuestStats(b.guestId, updatedBookings);
+    showToast("Резервацията е анулирана.");
   }
 
-  async function removeBooking(id) {
-    const ok = await dbDelete("bookings", id);
-    if (ok) {
-      setBookings(prev => prev.filter(x => x.id !== id));
-      showToast("Резервацията е изтрита.");
-    } else {
-      showToast("Грешка при изтриване.", "error");
-    }
+  async function removeBooking(b) {
+    // b is the full booking object (not just an id)
+    const toDelete = b.groupId
+      ? bookings.filter(x => x.groupId === b.groupId)
+      : [b];
+    await Promise.all(toDelete.map(x => dbDelete("bookings", x.id)));
+    const deletedIds = new Set(toDelete.map(x => x.id));
+    setBookings(prev => prev.filter(x => !deletedIds.has(x.id)));
+    showToast("Резервацията е изтрита.");
   }
 
-  async function saveRate(r) {
-    const ok = await dbUpsert("rates", r);
-    if (ok) {
-      setRates(prev => prev.find(x=>x.id===r.id) ? prev.map(x=>x.id===r.id?r:x) : [...prev, r]);
-      showToast("Тарифата е записана.");
-    } else {
-      showToast("Грешка при запис на тарифата.", "error");
-    }
-  }
-  async function removeRate(id) {
-    await dbDelete("rates", id);
-    setRates(prev => prev.filter(x => x.id !== id));
-  }
+
 
   if(!ready) return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",gap:14,background:"#1E293B"}}><div style={{width:12,height:12,borderRadius:"50%",background:"#D97706"}}/><span style={{color:"#64748B",fontSize:14}}>Зареждане…</span></div>;
   if(!user) return <LoginScreen users={users} onLogin={u=>{ localStorage.setItem("hoteldesk_user",JSON.stringify(u)); setUser(u); }}/>;
@@ -547,7 +600,7 @@ export default function App() {
   const monthCount  = bookings.filter(b=>{ const ms=`${calYear}-${pad(calMonth+1)}-01`,me=`${calYear}-${pad(calMonth+1)}-${pad(daysInMonth)}`; return b.checkIn<=me&&b.checkOut>ms&&b.status!=="cancelled"; }).length;
   const monthRev    = bookings.filter(b=>b.checkIn.startsWith(`${calYear}-${pad(calMonth+1)}`)&&b.status!=="cancelled").reduce((s,b)=>s+b.totalPrice,0);
 
-  const navItems=[{id:"calendar",label:"Календар",icon:"📅"},{id:"bookings",label:"Резервации",icon:"📋"},{id:"rooms",label:"Стаи",icon:"🛏️"},{id:"rates",label:"Тарифи",icon:"💰"},{id:"guests",label:"Гости",icon:"👤"},...(user.role==="admin"?[{id:"staff",label:"Персонал",icon:"👥"}]:[])];
+  const navItems=[{id:"calendar",label:"Календар",icon:"📅"},{id:"bookings",label:"Резервации",icon:"📋"},{id:"rooms",label:"Стаи",icon:"🛏️"},{id:"guests",label:"Гости",icon:"👤"},...(user.role==="admin"?[{id:"staff",label:"Персонал",icon:"👥"}]:[])];
 
   return (
     <div style={{display:"flex",height:"100vh",fontFamily:"'Inter',sans-serif",background:"#F8FAFC",overflow:"hidden"}}>
@@ -619,7 +672,7 @@ export default function App() {
             </button>
           )}
           {view==="rooms" && <button onClick={()=>setModal({type:"room",data:{}})} style={S.primaryBtn}>+ Добави стая</button>}
-          {view==="rates" && <button onClick={()=>setModal({type:"rate",data:{}})} style={S.primaryBtn}>+ Добави тарифа</button>}
+
           {view==="staff"&&user.role==="admin" && <button onClick={()=>setModal({type:"staff",data:{}})} style={S.primaryBtn}>+ Добави служител</button>}
         </header>
 
@@ -660,7 +713,86 @@ export default function App() {
                 </thead>
                 <tbody>
                   {visCalRooms.map(room=>{
-                    const rBkgs=bookings.filter(b=>b.roomId===room.id&&b.status!=="cancelled"&&b.checkOut>`${calYear}-${pad(calMonth+1)}-01`&&b.checkIn<=`${calYear}-${pad(calMonth+1)}-${pad(daysInMonth)}`);
+                    const monthStart=`${calYear}-${pad(calMonth+1)}-01`;
+                    const monthEnd=`${calYear}-${pad(calMonth+1)}-${pad(daysInMonth)}`;
+                    const rBkgs=bookings.filter(b=>b.roomId===room.id&&b.status!=="cancelled"&&b.checkOut>monthStart&&b.checkIn<=monthEnd);
+
+                    // Build a map: day number → booking that occupies it (for quick lookup)
+                    // A booking "occupies" day d if checkIn <= ds < checkOut
+                    const dayBooking={};
+                    rBkgs.forEach(b=>{
+                      days.forEach(d=>{
+                        const ds=`${calYear}-${pad(calMonth+1)}-${pad(d)}`;
+                        if(b.checkIn<=ds&&b.checkOut>ds) dayBooking[d]=b;
+                      });
+                    });
+
+                    // Build the cells for this row.
+                    // We iterate day-by-day. When we hit the START of a booking we emit
+                    // one wide <td colspan={N}>. For every subsequent day inside that same
+                    // booking we emit nothing (those cells are consumed by the colspan).
+                    const cells=[];
+                    let d=1;
+                    while(d<=daysInMonth){
+                      const ds=`${calYear}-${pad(calMonth+1)}-${pad(d)}`;
+                      const isToday=ds===today;
+                      const b=dayBooking[d];
+
+                      if(!b){
+                        // Empty cell — no booking on this day
+                        cells.push(
+                          <td key={d} className="tlc"
+                            onClick={()=>setModal({type:"booking",data:{roomId:room.id,checkIn:ds}})}
+                            title="Натиснете за резервация"
+                            style={{background:isToday?"#FFFBEB":"transparent",borderRight:"1px solid #F1F5F9",height:36,padding:0,verticalAlign:"middle",cursor:"pointer",transition:"background .1s",minWidth:32,width:32}}>
+                          </td>
+                        );
+                        d++;
+                      } else {
+                        // This day is the START of a booking block (either real start or month boundary).
+                        // Count how many consecutive days this booking occupies from here.
+                        // We cap at the end of the month.
+                        let span=0;
+                        let dd=d;
+                        while(dd<=daysInMonth&&dayBooking[dd]?.id===b.id){
+                          span++;
+                          dd++;
+                        }
+                        // Is this a "continues from previous month" booking?
+                        const continuesFromPrev = b.checkIn < monthStart;
+                        // Does this booking continue into next month?
+                        const continuesNext = b.checkOut > monthEnd;
+
+                        // Border radius: left rounded if starts this month, right rounded if ends this month
+                        const borderRadius=`${continuesFromPrev?0:5}px ${continuesNext?0:5}px ${continuesNext?0:5}px ${continuesFromPrev?0:5}px`;
+
+                        cells.push(
+                          <td key={d} colSpan={span}
+                            onClick={()=>setModal({type:"viewBooking",data:b})}
+                            title={b.guestName}
+                            style={{
+                              background:room.color,
+                              borderRadius,
+                              height:36,
+                              padding:"0 7px",
+                              verticalAlign:"middle",
+                              cursor:"pointer",
+                              // Right border only if booking ends within the month (so the gap shows)
+                              borderRight:continuesNext?"none":"2px solid #fff",
+                              // Left border to visually separate from the previous empty cell
+                              borderLeft:continuesFromPrev?"none":"2px solid #fff",
+                              overflow:"hidden",
+                              maxWidth:0, // forces text-overflow to work inside a td
+                            }}>
+                            <span style={{color:"#fff",fontSize:10,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"block"}}>
+                              {b.groupId?"🔗 ":""}{b.guestName}
+                            </span>
+                          </td>
+                        );
+                        d+=span;
+                      }
+                    }
+
                     return (
                       <tr key={room.id} style={{borderBottom:"1px solid #F1F5F9"}}>
                         <td style={{background:"#F8FAFC",padding:"7px 14px",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:2,borderRight:"1px solid #E2E8F0",verticalAlign:"middle"}}>
@@ -669,25 +801,7 @@ export default function App() {
                             <div><div style={{fontWeight:700,fontSize:12,color:"#1E293B"}}>{room.name}</div><div style={{fontSize:10,color:"#94A3B8"}}>{room.type}</div></div>
                           </div>
                         </td>
-                        {days.map(d=>{
-                          const ds=`${calYear}-${pad(calMonth+1)}-${pad(d)}`;
-                          const isToday=ds===today;
-                          const cellBkgs=rBkgs.filter(b=>b.checkIn<=ds&&b.checkOut>ds);
-                          const hasBooking=cellBkgs.length>0;
-                          const isStart=b=>b.checkIn===ds||(b.checkIn<`${calYear}-${pad(calMonth+1)}-01`&&d===1);
-                          const starters=cellBkgs.filter(b=>isStart(b));
-                          return (
-                            <td key={d} className="tlc" style={{background:isToday&&!hasBooking?"#FFFBEB":"transparent",borderRight:"1px solid #F1F5F9",height:36,padding:"2px 1px",verticalAlign:"middle",cursor:"pointer",transition:"background .1s",position:"relative"}}
-                              onClick={()=>{ if(cellBkgs.length) setModal({type:"viewBooking",data:cellBkgs[0]}); else setModal({type:"booking",data:{roomId:room.id,checkIn:ds}}); }}
-                              title={cellBkgs.length?cellBkgs.map(b=>b.guestName).join(", "):"Натиснете за резервация"}>
-                              {hasBooking && (
-                                <div style={{position:"absolute",inset:"3px 0px",background:starters.length?room.color:room.color+"99",borderRadius:starters.length?"4px 0 0 4px":"0",display:"flex",alignItems:"center",overflow:"hidden"}}>
-                                  {starters.map(b=><span key={b.id} style={{color:"#fff",fontSize:10,fontWeight:700,padding:"0 5px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.guestName}</span>)}
-                                </div>
-                              )}
-                            </td>
-                          );
-                        })}
+                        {cells}
                       </tr>
                     );
                   })}
@@ -712,22 +826,40 @@ export default function App() {
                       <th key={h} style={{textAlign:"left",padding:"10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0"}}>{h}</th>
                     ))}</tr></thead>
                     <tbody>
-                      {visBkgList.map(b=>{
-                        const room=rooms.find(r=>r.id===b.roomId);
-                        const st=STATUS_MAP[b.status]||STATUS_MAP.confirmed;
-                        return (
-                          <tr key={b.id} className="rowhov" style={{borderBottom:"1px solid #F1F5F9"}}>
-                            <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{b.guestName}</td>
-                            <td style={{padding:"12px 14px"}}><div style={{fontWeight:600,color:"#1E293B"}}>{room?.name||"—"}</div><div style={{fontSize:11,color:"#94A3B8"}}>{room?.type||""}</div></td>
-                            <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkIn}</td>
-                            <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkOut}</td>
-                            <td style={{padding:"12px 14px",color:"#374151"}}>{nightsBetween(b.checkIn,b.checkOut)}</td>
-                            <td style={{padding:"12px 14px"}}>{b.depositReceived?<span style={{color:"#166534",fontWeight:600}}>€{b.depositAmount}</span>:<span style={{color:"#94A3B8"}}>—</span>}</td>
-                            <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span></td>
-                            <td style={{padding:"12px 14px"}}><button onClick={()=>setModal({type:"viewBooking",data:b})} style={S.outlineBtn}>Преглед</button></td>
-                          </tr>
-                        );
-                      })}
+                      {(()=>{
+                        // Collapse grouped bookings: show one row per group
+                        const seen=new Set();
+                        return visBkgList.filter(b=>{
+                          if(!b.groupId) return true;
+                          if(seen.has(b.groupId)) return false;
+                          seen.add(b.groupId); return true;
+                        }).map(b=>{
+                          const room=rooms.find(r=>r.id===b.roomId);
+                          const st=STATUS_MAP[b.status]||STATUS_MAP.confirmed;
+                          // For groups, count how many rooms are in this reservation
+                          const groupSize=b.groupId?bookings.filter(x=>x.groupId===b.groupId).length:1;
+                          return (
+                            <tr key={b.id} className="rowhov" style={{borderBottom:"1px solid #F1F5F9"}}>
+                              <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{b.guestName}</td>
+                              <td style={{padding:"12px 14px"}}>
+                                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                  <div>
+                                    <div style={{fontWeight:600,color:"#1E293B"}}>{room?.name||"—"}</div>
+                                    <div style={{fontSize:11,color:"#94A3B8"}}>{room?.type||""}</div>
+                                  </div>
+                                  {groupSize>1&&<span style={{fontSize:10,fontWeight:700,background:"#EFF6FF",color:"#1D4ED8",borderRadius:6,padding:"2px 6px",whiteSpace:"nowrap"}}>+{groupSize-1} стая</span>}
+                                </div>
+                              </td>
+                              <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkIn}</td>
+                              <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkOut}</td>
+                              <td style={{padding:"12px 14px",color:"#374151"}}>{nightsBetween(b.checkIn,b.checkOut)}</td>
+                              <td style={{padding:"12px 14px"}}>{b.depositReceived?<span style={{color:"#166534",fontWeight:600}}>€{b.depositAmount}</span>:<span style={{color:"#94A3B8"}}>—</span>}</td>
+                              <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span></td>
+                              <td style={{padding:"12px 14px"}}><button onClick={()=>setModal({type:"viewBooking",data:b})} style={S.outlineBtn}>Преглед</button></td>
+                            </tr>
+                          );
+                        });
+                      })()}
                     </tbody>
                   </table>
               }
@@ -753,24 +885,6 @@ export default function App() {
             </div>
           )}
 
-          {/* ══ RATES ═════════════════════════════════════════════════ */}
-          {view==="rates" && (
-            <div style={{maxWidth:640,background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
-              <div style={{padding:"16px 20px",borderBottom:"1px solid #F1F5F9",fontFamily:"'Inter',sans-serif",fontSize:16,fontWeight:700,color:"#1E293B"}}>Сезонни тарифи</div>
-              <div style={{padding:"8px 20px 16px"}}>
-                <p style={{fontSize:13,color:"#64748B",margin:"8px 0 16px"}}>Коефициентите умножават основната цена. 1.4 означава +40%.</p>
-                {rates.length===0&&<div style={{textAlign:"center",padding:32,color:"#CBD5E1"}}>Няма добавени тарифи</div>}
-                {rates.map(rate=>(
-                  <div key={rate.id} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 0",borderBottom:"1px solid #F8FAFC"}}>
-                    <div style={{padding:"5px 13px",borderRadius:20,background:"#FFF7ED",color:"#B45309",fontWeight:700,fontSize:13,flexShrink:0}}>×{rate.multiplier}</div>
-                    <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14,color:"#1E293B"}}>{rate.name}</div><div style={{fontSize:12,color:"#94A3B8"}}>{rate.startDate} → {rate.endDate}</div></div>
-                    <button onClick={()=>setModal({type:"rate",data:{...rate}})} style={S.outlineBtn}>Редактирай</button>
-                    <button onClick={()=>removeRate(rate.id)} style={S.dangerBtn}>×</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* ══ STAFF ════════════════════════════════════════════════ */}
           {view==="staff"&&user.role==="admin" && (
@@ -796,53 +910,51 @@ export default function App() {
 
       {/* MODALS */}
       {modal&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16}}
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16,colorScheme:"light"}}
           onClick={e=>{if(e.target===e.currentTarget)setModal(null);}}>
           {modal.type==="booking"&&<BookingModal rooms={rooms} bookings={bookings} initial={modal.data} user={user}
-            onSave={async b=>{
-              // saveBooking returns true on success, false if a conflict modal was triggered
-              // So we only close this modal when the save actually completed.
-              const success = await saveBooking(b,
-                (existingGuest, newBooking)=>setModal({type:"guestConflict", existingGuest, newBooking})
+            onSave={async ({shared, rooms:roomsList})=>{
+              // saveGroupBooking returns true on success, false if a conflict modal was triggered
+              const success = await saveGroupBooking(
+                shared,
+                roomsList,
+                (existingGuest, shared, rooms)=>setModal({type:"guestConflict", existingGuest, shared, rooms})
               );
               if (success) setModal(null);
             }}
             onClose={()=>setModal(null)}/>}
           {modal.type==="guestConflict"&&<GuestConflictModal
-            existingGuest={modal.existingGuest} booking={modal.newBooking}
-            onUseExisting={async b=>{
-              const fb={...b,guestId:modal.existingGuest.id};
-              const ok = await dbUpsert("bookings",fb);
+            existingGuest={modal.existingGuest} booking={{...modal.shared}}
+            onUseExisting={async ()=>{
+              // User chose to link to the existing guest — save directly with that guestId
+              const ok = await saveGroupBookingDirect(modal.shared, modal.rooms, modal.existingGuest.id);
               if (ok) {
-                setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]);
                 showToast("Резервацията е свързана с existing госта.");
+                setModal(null);
               } else {
                 showToast("Грешка при запис.", "error");
               }
-              setModal(null);
             }}
-            onCreateNew={async b=>{
-              const ng={id:`g${Date.now()}`,name:b.guestName,phone:b.phone,email:b.email||"",status:"regular",notes:"",createdAt:fmt(new Date())};
+            onCreateNew={async ()=>{
+              // User wants a fresh guest profile
+              const ng={id:`g${Date.now()}`,name:modal.shared.guestName,phone:modal.shared.phone,email:modal.shared.email||"",status:"regular",notes:"",createdAt:fmt(new Date())};
               await dbUpsert("guests",ng);
               setGuests(prev=>[...prev,ng]);
-              const fb={...b,guestId:ng.id};
-              const ok = await dbUpsert("bookings",fb);
+              const ok = await saveGroupBookingDirect(modal.shared, modal.rooms, ng.id);
               if (ok) {
-                setBookings(prev=>prev.find(x=>x.id===fb.id)?prev.map(x=>x.id===fb.id?fb:x):[...prev,fb]);
                 showToast("Нов профил създаден и резервацията е записана.");
+                setModal(null);
               } else {
                 showToast("Грешка при запис.", "error");
               }
-              setModal(null);
             }}
             onClose={()=>setModal(null)}/>}
-          {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} rooms={rooms} user={user}
+          {modal.type==="viewBooking"&&<ViewBookingModal booking={modal.data} bookings={bookings} rooms={rooms} user={user}
             onEdit={()=>setModal({type:"booking",data:modal.data})}
             onCancel={b=>{cancelBooking(b);setModal(null);}}
-            onDelete={b=>{removeBooking(b.id);setModal(null);}}
+            onDelete={b=>{removeBooking(b);setModal(null);}}
             onClose={()=>setModal(null)}/>}
-          {modal.type==="room"&&<RoomModal initial={modal.data} rooms={rooms} onSave={r=>{saveRoom(r);setModal(null);}} onClose={()=>setModal(null)}/>}
-          {modal.type==="rate"&&<RateModal initial={modal.data} onSave={r=>{saveRate(r);setModal(null);}} onClose={()=>setModal(null)}/>}
+          {modal.type==="room"&&<RoomModal initial={modal.data} rooms={rooms} onSave={async r=>{await saveRoom(r);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="staff"&&<StaffModal users={users} onSave={u=>{saveUser(u);setModal(null);}} onClose={()=>setModal(null)}/>}
           {modal.type==="guest"&&<GuestModal initial={modal.data} bookings={bookings} rooms={rooms} onSave={g=>{saveGuest(g);setModal(null);}} onClose={()=>setModal(null)}/>}
         </div>
@@ -884,75 +996,161 @@ const SOURCES = ["Booking.com","По телефона","WhatsApp","Поща","Д
 function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
   const isEdit=!!initial.id;
   const todayStr=fmt(new Date());
-  const [f,setF]=useState({
-    id:           initial.id||`b${Date.now()}`,
-    guestName:    initial.guestName||"",
-    phone:        initial.phone||"",
-    email:        initial.email||"",
-    bookingDate:  initial.bookingDate||todayStr,
-    source:       initial.source||SOURCES[0],
-    roomId:       initial.roomId||rooms[0]?.id||"",
-    checkIn:      initial.checkIn||"",
-    checkOut:     initial.checkOut||"",
-    pricePerNight:initial.pricePerNight||"",
-    status:       initial.status||"confirmed",
+
+  // ── Build initial rooms list ─────────────────────────────────────────────
+  // When editing a grouped booking load all siblings; otherwise start with one entry.
+  // Room entries now only hold { bookingId, roomId, pricePerNight } — dates live in shared.
+  const [roomsList, setRoomsList] = useState(()=>{
+    if (isEdit && initial.groupId) {
+      return bookings
+        .filter(b=>b.groupId===initial.groupId)
+        .map(b=>({ bookingId:b.id, roomId:b.roomId, pricePerNight:b.pricePerNight||"" }));
+    }
+    return [{ bookingId:initial.id||`b${Date.now()}`, roomId:initial.roomId||rooms[0]?.id||"", pricePerNight:initial.pricePerNight||"" }];
+  });
+
+  // ── Shared fields ────────────────────────────────────────────────────────
+  // checkIn and checkOut are now here — same for every room in the reservation.
+  const [shared, setShared] = useState(()=>({
+    guestName:       initial.guestName||"",
+    phone:           initial.phone||"",
+    email:           initial.email||"",
+    checkIn:         initial.checkIn||"",
+    checkOut:        initial.checkOut||"",
+    bookingDate:     initial.bookingDate||todayStr,
+    source:          initial.source||SOURCES[0],
+    nationality:     initial.nationality||"",
+    status:          initial.status||"confirmed",
     depositReceived: initial.depositReceived||false,
     depositAmount:   initial.depositAmount||"",
     depositDate:     initial.depositDate||"",
-    fullyPaid:    initial.fullyPaid||false,
-    nationality:  initial.nationality||"",
-    createdBy:    initial.createdBy||user.name,
-  });
-  const [err,setErr]=useState("");
-  const nights   = f.checkIn&&f.checkOut&&f.checkOut>f.checkIn ? nightsBetween(f.checkIn,f.checkOut) : 0;
-  const total    = nights>0&&f.pricePerNight ? Math.round(nights*Number(f.pricePerNight)) : 0;
-  const deposit  = f.depositReceived&&f.depositAmount ? Number(f.depositAmount) : 0;
-  const remaining= f.fullyPaid ? 0 : Math.max(0, total - deposit);
+    fullyPaid:       initial.fullyPaid||false,
+    notes:           initial.notes||"",
+    createdBy:       initial.createdBy||user.name,
+    groupId:         initial.groupId||null,
+  }));
 
-  function save(){
-    if(!f.guestName.trim()) return setErr("Въведете иmе на госта.");
-    if(!f.checkIn||!f.checkOut) return setErr("Задайте дати на настаняване и напускане.");
-    if(f.checkOut<=f.checkIn) return setErr("Датата на напускане трябва да е след настаняването.");
-    if(!f.pricePerNight||Number(f.pricePerNight)<=0) return setErr("Въведете цена на нощ.");
-    const conflict=bookings.find(b=>b.id!==f.id&&b.roomId===f.roomId&&b.status!=="cancelled"&&b.checkIn<f.checkOut&&b.checkOut>f.checkIn);
-    if(conflict) return setErr(`Стаята е вече резервирана (${conflict.guestName}).`);
-    onSave({...f, pricePerNight:Number(f.pricePerNight), totalPrice:total, depositAmount:f.depositReceived?Number(f.depositAmount):0, remaining });
+  const [err, setErr] = useState("");
+
+  // ── Derived totals ───────────────────────────────────────────────────────
+  // nights is shared — calculated once from shared.checkIn / checkOut.
+  const nights    = shared.checkIn&&shared.checkOut&&shared.checkOut>shared.checkIn ? nightsBetween(shared.checkIn,shared.checkOut) : 0;
+  // Each room has its own price per night, so we compute per-room totals separately.
+  const roomTotals = roomsList.map(r=>({
+    price: nights>0&&r.pricePerNight ? Math.round(nights*Number(r.pricePerNight)) : 0
+  }));
+  const grandTotal = roomTotals.reduce((s,t)=>s+t.price, 0);
+  const deposit    = shared.depositReceived&&shared.depositAmount ? Number(shared.depositAmount) : 0;
+  const remaining  = shared.fullyPaid ? 0 : Math.max(0, grandTotal - deposit);
+
+  // ── Room helpers ─────────────────────────────────────────────────────────
+  function updateRoom(idx, field, value) {
+    setRoomsList(prev=>prev.map((r,i)=>i===idx?{...r,[field]:value}:r));
+  }
+  function addRoom() {
+    setRoomsList(prev=>[...prev, { bookingId:`b${Date.now()}_${prev.length}`, roomId:rooms[0]?.id||"", pricePerNight:"" }]);
+  }
+  function removeRoom(idx) {
+    setRoomsList(prev=>prev.filter((_,i)=>i!==idx));
+  }
+
+  // ── Validation & save ────────────────────────────────────────────────────
+  function save() {
+    if (!shared.guestName.trim())                           return setErr("Въведете иmе на госта.");
+    if (!shared.checkIn||!shared.checkOut)                  return setErr("Задайте дати на настаняване и напускане.");
+    if (shared.checkOut<=shared.checkIn)                    return setErr("Датата на напускане трябва да е след настаняването.");
+    for (let i=0; i<roomsList.length; i++) {
+      const r=roomsList[i];
+      const label=roomsList.length>1?` (Стая ${i+1})`:"";
+      if (!r.pricePerNight||Number(r.pricePerNight)<=0)    return setErr(`Въведете цена на нощ${label}.`);
+      // Exclude sibling records of this reservation from the conflict check
+      const siblingIds=new Set(roomsList.map(x=>x.bookingId));
+      const conflict=bookings.find(b=>!siblingIds.has(b.id)&&b.roomId===r.roomId&&b.status!=="cancelled"&&b.checkIn<shared.checkOut&&b.checkOut>shared.checkIn);
+      if (conflict) {
+        const roomName=rooms.find(rm=>rm.id===r.roomId)?.name||"стаята";
+        return setErr(`${roomName} е вече резервирана за тези дати (${conflict.guestName}).`);
+      }
+      // Prevent the same room from being added twice in the same group
+      for (let j=0; j<i; j++) {
+        if (roomsList[j].roomId===r.roomId) return setErr(`Стаята е добавена два пъти.`);
+      }
+    }
+    onSave({ shared, rooms:roomsList });
   }
 
   return (
-    <div style={S.modal}>
-      <div style={S.modalHeader}><span style={S.modalTitle}>{isEdit?"Редактирай резервация":"Нова резервация"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+    <div style={{...S.modal, maxWidth:560}}>
+      <div style={S.modalHeader}>
+        <span style={S.modalTitle}>{isEdit?"Редактирай резервация":"Нова резервация"}</span>
+        <button onClick={onClose} style={S.closeBtn}>×</button>
+      </div>
       <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
 
-        <Fld label="Иmе на госта"><input value={f.guestName} onChange={e=>setF(x=>({...x,guestName:e.target.value}))} style={S.input} placeholder="Пълно иmе"/></Fld>
+        {/* ── Guest info ── */}
+        <Fld label="Иmе на госта"><input value={shared.guestName} onChange={e=>setShared(x=>({...x,guestName:e.target.value}))} style={S.input} placeholder="Пълно иmе"/></Fld>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Fld label="Телефон"><input value={f.phone} onChange={e=>setF(x=>({...x,phone:e.target.value}))} style={S.input} placeholder="+359…"/></Fld>
-          <Fld label="Имейл"><input type="email" value={f.email} onChange={e=>setF(x=>({...x,email:e.target.value}))} style={S.input} placeholder="guest@email.com"/></Fld>
+          <Fld label="Телефон"><input value={shared.phone} onChange={e=>setShared(x=>({...x,phone:e.target.value}))} style={S.input} placeholder="+359…"/></Fld>
+          <Fld label="Имейл"><input type="email" value={shared.email} onChange={e=>setShared(x=>({...x,email:e.target.value}))} style={S.input} placeholder="guest@email.com"/></Fld>
         </div>
         <Fld label="Националност">
-          <NationalitySelect
-            value={f.nationality}
-            onChange={v => setF(x=>({...x, nationality:v}))}
-            inputStyle={S.input}
-          />
+          <NationalitySelect value={shared.nationality} onChange={v=>setShared(x=>({...x,nationality:v}))} inputStyle={S.input}/>
         </Fld>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Fld label="Дата на резервацията"><input type="date" value={f.bookingDate} onChange={e=>setF(x=>({...x,bookingDate:e.target.value}))} style={S.input}/></Fld>
-          <Fld label="Източник"><select value={f.source} onChange={e=>setF(x=>({...x,source:e.target.value}))} style={S.input}>{SOURCES.map(s=><option key={s}>{s}</option>)}</select></Fld>
+          <Fld label="Дата на резервацията"><input type="date" value={shared.bookingDate} onChange={e=>setShared(x=>({...x,bookingDate:e.target.value}))} style={S.input}/></Fld>
+          <Fld label="Източник"><select value={shared.source} onChange={e=>setShared(x=>({...x,source:e.target.value}))} style={S.input}>{SOURCES.map(s=><option key={s}>{s}</option>)}</select></Fld>
         </div>
 
-        <Fld label="Стая"><select value={f.roomId} onChange={e=>setF(x=>({...x,roomId:e.target.value}))} style={S.input}>{rooms.map(r=><option key={r.id} value={r.id}>{r.name} — {r.type}</option>)}</select></Fld>
+        {/* ── Shared dates — one check-in / check-out for the whole reservation ── */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Fld label="Настаняване"><input type="date" value={f.checkIn} onChange={e=>setF(x=>({...x,checkIn:e.target.value}))} style={S.input}/></Fld>
-          <Fld label="Напускане">  <input type="date" value={f.checkOut} onChange={e=>setF(x=>({...x,checkOut:e.target.value}))} style={S.input}/></Fld>
+          <Fld label="Настаняване"><input type="date" value={shared.checkIn}  onChange={e=>setShared(x=>({...x,checkIn:e.target.value}))}  style={S.input}/></Fld>
+          <Fld label="Напускане">  <input type="date" value={shared.checkOut} onChange={e=>setShared(x=>({...x,checkOut:e.target.value}))} style={S.input}/></Fld>
         </div>
-        <Fld label="Цена на нощ (€)"><input type="number" min="1" value={f.pricePerNight} onChange={e=>setF(x=>({...x,pricePerNight:e.target.value}))} style={S.input} placeholder="напр. 90"/></Fld>
 
-        {nights>0&&Number(f.pricePerNight)>0&&(
+        {/* ── Rooms — each card is just: which room + price per night ── */}
+        <div style={{marginTop:4}}>
+          {roomsList.map((room,idx)=>{
+            const {price}=roomTotals[idx];
+            return (
+              <div key={room.bookingId} style={{background:"#F8FAFC",borderRadius:10,border:"1px solid #E2E8F0",marginBottom:12,overflow:"hidden"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px",borderBottom:"1px solid #E2E8F0",background:"#F1F5F9"}}>
+                  <span style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:".06em"}}>Стая {idx+1}</span>
+                  {roomsList.length>1&&<button onClick={()=>removeRoom(idx)} style={{background:"transparent",border:"none",color:"#94A3B8",cursor:"pointer",fontSize:18,padding:"0 4px",lineHeight:1,fontFamily:"inherit"}}>×</button>}
+                </div>
+                <div style={{padding:"12px 14px"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,alignItems:"end"}}>
+                    <Fld label="Стая">
+                      <select value={room.roomId} onChange={e=>updateRoom(idx,"roomId",e.target.value)} style={S.input}>
+                        {rooms.map(r=><option key={r.id} value={r.id}>{r.name} — {r.type}</option>)}
+                      </select>
+                    </Fld>
+                    <Fld label="Цена на нощ (€)">
+                      <input type="number" min="1" value={room.pricePerNight} onChange={e=>updateRoom(idx,"pricePerNight",e.target.value)} style={S.input} placeholder="напр. 90"/>
+                    </Fld>
+                  </div>
+                  {nights>0&&Number(room.pricePerNight)>0&&(
+                    <div style={{fontSize:12,color:"#64748B",marginTop:4}}>
+                      {nights} нощ{nights!==1?"увки":"увка"} × €{room.pricePerNight} = <strong style={{color:"#1E293B"}}>€{price}</strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          <button onClick={addRoom} style={{...S.outlineBtn,width:"100%",marginBottom:14,color:"#059669",borderColor:"#BBF7D0",background:"#F0FDF4"}}>+ Добави стая</button>
+        </div>
+
+        {/* ── Price summary ── */}
+        {grandTotal>0&&(
           <div style={{background:"#EFF6FF",borderRadius:10,padding:"12px 14px",marginBottom:14,border:"1px solid #BFDBFE"}}>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#1D4ED8",marginBottom:4}}>
-              <span>{nights} нощ{nights!==1?"увки":"увка"} × €{f.pricePerNight}</span>
-              <span style={{fontWeight:700}}>Общо: €{total}</span>
+            {roomsList.length>1&&roomTotals.map((rt,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#3B82F6",marginBottom:3}}>
+                <span>{rooms.find(r=>r.id===roomsList[i].roomId)?.name||`Стая ${i+1}`}: {nights} нощ{nights!==1?"увки":"увка"} × €{roomsList[i].pricePerNight}</span>
+                <span>€{rt.price}</span>
+              </div>
+            ))}
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#1D4ED8",marginBottom:4,borderTop:roomsList.length>1?"1px solid #BFDBFE":"none",paddingTop:roomsList.length>1?8:0}}>
+              <span>{roomsList.length===1?`${nights} нощ${nights!==1?"увки":"увка"} × €${roomsList[0].pricePerNight}`:"Обща сума"}</span>
+              <span style={{fontWeight:700}}>Общо: €{grandTotal}</span>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#059669"}}>
               <span>Депозит</span><span style={{fontWeight:700}}>€{deposit}</span>
@@ -963,7 +1161,8 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
           </div>
         )}
 
-        <Fld label="Статус"><select value={f.status} onChange={e=>setF(x=>({...x,status:e.target.value}))} style={S.input}>
+        {/* ── Status, deposit, notes ── */}
+        <Fld label="Статус"><select value={shared.status} onChange={e=>setShared(x=>({...x,status:e.target.value}))} style={S.input}>
           <option value="confirmed">Потвърдена</option>
           <option value="pending">Очаква депозит</option>
           <option value="cancelled">Анулирана</option>
@@ -971,17 +1170,17 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
 
         <div style={{background:"#F8FAFC",borderRadius:10,padding:"14px",marginBottom:14,border:"1px solid #E2E8F0"}}>
           <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:8}}>
-            <input type="checkbox" checked={f.fullyPaid} onChange={e=>setF(x=>({...x,fullyPaid:e.target.checked,depositReceived:e.target.checked?x.depositReceived:x.depositReceived}))} style={{width:16,height:16,accentColor:"#059669"}}/>
+            <input type="checkbox" checked={shared.fullyPaid} onChange={e=>setShared(x=>({...x,fullyPaid:e.target.checked}))} style={{width:16,height:16,accentColor:"#059669"}}/>
             <span style={{fontWeight:600,fontSize:13,color:"#1E293B"}}>Изцяло платена</span>
           </label>
-          <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:f.depositReceived?14:0}}>
-            <input type="checkbox" checked={f.depositReceived} onChange={e=>setF(x=>({...x,depositReceived:e.target.checked}))} style={{width:16,height:16,accentColor:"#D97706"}}/>
+          <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:shared.depositReceived?14:0}}>
+            <input type="checkbox" checked={shared.depositReceived} onChange={e=>setShared(x=>({...x,depositReceived:e.target.checked}))} style={{width:16,height:16,accentColor:"#D97706"}}/>
             <span style={{fontWeight:600,fontSize:13,color:"#1E293B"}}>Получен депозит</span>
           </label>
-          {f.depositReceived&&(
+          {shared.depositReceived&&(
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <Fld label="Сума (€)"><input type="number" min="0" value={f.depositAmount} onChange={e=>setF(x=>({...x,depositAmount:e.target.value}))} style={S.input} placeholder="0"/></Fld>
-              <Fld label="Дата на депозита"><input type="date" value={f.depositDate} onChange={e=>setF(x=>({...x,depositDate:e.target.value}))} style={S.input}/></Fld>
+              <Fld label="Сума (€)"><input type="number" min="0" value={shared.depositAmount} onChange={e=>setShared(x=>({...x,depositAmount:e.target.value}))} style={S.input} placeholder="0"/></Fld>
+              <Fld label="Дата на депозита"><input type="date" value={shared.depositDate} onChange={e=>setShared(x=>({...x,depositDate:e.target.value}))} style={S.input}/></Fld>
             </div>
           )}
         </div>
@@ -991,8 +1190,8 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
           <span style={{fontWeight:800,fontSize:18,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>
         </div>
 
-        <Fld label="Забележки"><input value={f.notes} onChange={e=>setF(x=>({...x,notes:e.target.value}))} style={S.input} placeholder="По желание…"/></Fld>
-        <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>Добавена от: <strong style={{color:"#475569"}}>{f.createdBy}</strong></div>
+        <Fld label="Забележки"><input value={shared.notes} onChange={e=>setShared(x=>({...x,notes:e.target.value}))} style={S.input} placeholder="По желание…"/></Fld>
+        <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>Добавена от: <strong style={{color:"#475569"}}>{shared.createdBy}</strong></div>
         {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:10}}>{err}</div>}
       </div>
       <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
@@ -1006,47 +1205,90 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
 // ── VIEW BOOKING MODAL ────────────────────────────────────────────────────────
 // CHANGE: Delete button is now visible to ALL users (not just admins).
 // The reasoning: staff need to be able to delete test/erroneous bookings too.
-function ViewBookingModal({booking:b,rooms,user,onEdit,onCancel,onDelete,onClose}) {
-  const room=rooms.find(r=>r.id===b.roomId);
-  const nights=nightsBetween(b.checkIn,b.checkOut);
-  const st=STATUS_MAP[b.status]||STATUS_MAP.confirmed;
-  const remaining=b.fullyPaid?0:Math.max(0,(b.totalPrice||0)-(b.depositReceived?b.depositAmount||0:0));
-  const rows=[
-    ["Гост",           b.guestName],
-    ["Телефон",        b.phone||"—"],
-    ["Имейл",          b.email||"—"],
-    ["Националност",   b.nationality||"—"],
-    ["Дата на резервацията", b.bookingDate||"—"],
-    ["Източник",       b.source||"—"],
-    ["Стая",           room?.name||"—"],
-    ["Тип",            room?.type||"—"],
-    ["Настаняване",    b.checkIn],
-    ["Напускане",      b.checkOut],
-    ["Нощувки",        nights],
-    ["Цена/нощ",       b.pricePerNight?`€${b.pricePerNight}`:"—"],
-    ["Обща сума",      `€${b.totalPrice||0}`],
-    ["Депозит",        b.depositReceived?`€${b.depositAmount} (${b.depositDate})`:"Не е получен"],
-    ["Изцяло платена", b.fullyPaid?<span style={{color:"#166534",fontWeight:700}}>✓ Да</span>:<span style={{color:"#94A3B8"}}>Не</span>],
-    ["Остава за плащане", <span style={{fontWeight:700,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>],
-    ["Статус",         <span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span>],
-    ["Забележки",      b.notes||"—"],
-    ["Добавена от",    b.createdBy||"—"],
+// CHANGE 2: Now group-aware — shows all rooms when booking has a groupId.
+function ViewBookingModal({booking:b, bookings, rooms, user, onEdit, onCancel, onDelete, onClose}) {
+  // Collect all booking records for this reservation (1 for single-room, N for groups)
+  const groupBookings = b.groupId
+    ? bookings.filter(x => x.groupId === b.groupId).sort((a,c)=>a.checkIn<c.checkIn?-1:1)
+    : [b];
+  // Grand total = sum of each room's individual price
+  const groupTotal = groupBookings.reduce((s,gb)=>s+Number(gb.totalPrice||0),0);
+  const deposit    = b.depositReceived ? Number(b.depositAmount)||0 : 0;
+  const remaining  = b.fullyPaid ? 0 : Math.max(0, groupTotal - deposit);
+  const st = STATUS_MAP[b.status]||STATUS_MAP.confirmed;
+
+  const sharedRows=[
+    ["Гост",                b.guestName],
+    ["Телефон",             b.phone||"—"],
+    ["Имейл",               b.email||"—"],
+    ["Националност",        b.nationality||"—"],
+    ["Дата на резервацията",b.bookingDate||"—"],
+    ["Източник",            b.source||"—"],
   ];
+  const paymentRows=[
+    ["Обща сума",           `€${groupTotal}`],
+    ["Депозит",             b.depositReceived?`€${b.depositAmount} (${b.depositDate})`:"Не е получен"],
+    ["Изцяло платена",      b.fullyPaid?<span style={{color:"#166534",fontWeight:700}}>✓ Да</span>:<span style={{color:"#94A3B8"}}>Не</span>],
+    ["Остава за плащане",   <span style={{fontWeight:700,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>],
+    ["Статус",              <span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span>],
+    ["Забележки",           b.notes||"—"],
+    ["Добавена от",         b.createdBy||"—"],
+  ];
+
+  function Row({label,val}) {
+    return (
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F1F5F9",fontSize:14}}>
+        <span style={{color:"#64748B",fontSize:12,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase"}}>{label}</span>
+        <span style={{fontWeight:600,color:"#1E293B",maxWidth:220,textAlign:"right"}}>{val}</span>
+      </div>
+    );
+  }
+
   return (
     <div style={S.modal}>
-      <div style={S.modalHeader}><span style={S.modalTitle}>Детайли за резервацията</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+      <div style={S.modalHeader}>
+        <span style={S.modalTitle}>
+          Детайли за резервацията
+          {b.groupId&&<span style={{fontSize:11,fontWeight:700,background:"#EFF6FF",color:"#1D4ED8",borderRadius:6,padding:"2px 8px",marginLeft:10}}>🔗 {groupBookings.length} стаи</span>}
+        </span>
+        <button onClick={onClose} style={S.closeBtn}>×</button>
+      </div>
       <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
-        {rows.map(([label,val])=>(
-          <div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F1F5F9",fontSize:14}}>
-            <span style={{color:"#64748B",fontSize:12,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase"}}>{label}</span>
-            <span style={{fontWeight:600,color:"#1E293B",maxWidth:220,textAlign:"right"}}>{val}</span>
+        {/* Guest & booking info */}
+        {sharedRows.map(([label,val])=><Row key={label} label={label} val={val}/>)}
+
+        {/* Rooms section */}
+        <div style={{margin:"14px 0 4px"}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#94A3B8",textTransform:"uppercase",letterSpacing:"1px",marginBottom:8}}>
+            {groupBookings.length>1?"Стаи":"Стая"}
           </div>
-        ))}
+          {groupBookings.map((gb,i)=>{
+            const room=rooms.find(r=>r.id===gb.roomId);
+            const n=nightsBetween(gb.checkIn,gb.checkOut);
+            return (
+              <div key={gb.id} style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",marginBottom:8,border:"1px solid #E2E8F0"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{width:10,height:10,borderRadius:"50%",background:room?.color||"#94A3B8",display:"inline-block",flexShrink:0}}/>
+                    <span style={{fontWeight:700,fontSize:14,color:"#1E293B"}}>{room?.name||"—"}</span>
+                    <span style={{fontSize:11,color:"#94A3B8"}}>{room?.type}</span>
+                  </div>
+                  <span style={{fontWeight:700,color:"#1E293B"}}>€{gb.totalPrice||0}</span>
+                </div>
+                <div style={{fontSize:12,color:"#64748B"}}>
+                  {gb.checkIn} → {gb.checkOut} · {n} нощ{n!==1?"увки":"увка"} × €{gb.pricePerNight}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Payment & status info */}
+        {paymentRows.map(([label,val])=><Row key={label} label={label} val={val}/>)}
       </div>
       <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
-        {b.status!=="cancelled"&&<button onClick={()=>onCancel(b)} style={S.outlineBtn}>Анулирай</button>}
-        {/* Delete is now available to all users, not just admins */}
-        <button onClick={()=>{ if(confirm("Изтриете тази резервация? Действието е необратимо.")) onDelete(b); }} style={S.dangerBtn}>Изтрий</button>
+        {b.status!=="cancelled"&&<button onClick={()=>onCancel(b)} style={S.outlineBtn}>Анулирай{b.groupId?" всички":""}</button>}
+        <button onClick={()=>{ if(confirm("Изтриете тази резервация? Действието е необратимо.")) onDelete(b); }} style={S.dangerBtn}>Изтрий{b.groupId?" всички":""}</button>
         <button onClick={onEdit} style={S.primaryBtn}>Редактирай</button>
       </div>
     </div>
@@ -1056,7 +1298,7 @@ function ViewBookingModal({booking:b,rooms,user,onEdit,onCancel,onDelete,onClose
 // ── ROOM MODAL ────────────────────────────────────────────────────────────────
 function RoomModal({initial,rooms,onSave,onClose}) {
   const isEdit=!!initial.id;
-  const [f,setF]=useState({id:initial.id||`r${Date.now()}`,name:initial.name||"",type:initial.type||ROOM_TYPES[0],color:initial.color||PALETTE[rooms.length%PALETTE.length]});
+  const [f,setF]=useState({...initial, id:initial.id||`r${Date.now()}`,name:initial.name||"",type:initial.type||ROOM_TYPES[0],color:initial.color||PALETTE[rooms.length%PALETTE.length]});
   const [err,setErr]=useState("");
   function save(){ if(!f.name.trim()) return setErr("Въведете иmе на стаята."); onSave(f); }
   return (
@@ -1071,33 +1313,6 @@ function RoomModal({initial,rooms,onSave,onClose}) {
       <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={save} style={S.primaryBtn}>{isEdit?"Запази":"Добави стая"}</button>
-      </div>
-    </div>
-  );
-}
-
-// ── RATE MODAL ────────────────────────────────────────────────────────────────
-function RateModal({initial,onSave,onClose}) {
-  const isEdit=!!initial.id;
-  const [f,setF]=useState({id:initial.id||`sr${Date.now()}`,name:initial.name||"",startDate:initial.startDate||"",endDate:initial.endDate||"",multiplier:initial.multiplier||1.2});
-  const [err,setErr]=useState("");
-  function save(){ if(!f.name.trim()) return setErr("Въведете иmе."); if(!f.startDate||!f.endDate) return setErr("Задайте дати."); if(f.endDate<f.startDate) return setErr("Крайната дата трябва да е след началната."); onSave({...f,multiplier:Number(f.multiplier)}); }
-  return (
-    <div style={S.modal}>
-      <div style={S.modalHeader}><span style={S.modalTitle}>{isEdit?"Редактирай тарифа":"Добави тарифа"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
-      <div style={{padding:"18px 20px"}}>
-        <Fld label="Наименование"><input value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))} style={S.input} placeholder="напр. Летен сезон"/></Fld>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Fld label="Начална дата"><input type="date" value={f.startDate} onChange={e=>setF(x=>({...x,startDate:e.target.value}))} style={S.input}/></Fld>
-          <Fld label="Крайна дата"> <input type="date" value={f.endDate}   onChange={e=>setF(x=>({...x,endDate:e.target.value}))} style={S.input}/></Fld>
-        </div>
-        <Fld label="Коефициент (1.5 = +50%)"><input type="number" step="0.05" min="0.1" max="5" value={f.multiplier} onChange={e=>setF(x=>({...x,multiplier:e.target.value}))} style={S.input}/></Fld>
-        {f.multiplier&&<p style={{fontSize:12,color:"#64748B",marginBottom:8}}>→ Стая за €100/нощ ще струва <strong>€{Math.round(Number(f.multiplier)*100)}/нощ</strong> в този период.</p>}
-        {err&&<div style={{color:"#DC2626",fontSize:13}}>{err}</div>}
-      </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
-        <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
-        <button onClick={save} style={S.primaryBtn}>{isEdit?"Запази":"Добави тарифа"}</button>
       </div>
     </div>
   );
@@ -1274,7 +1489,7 @@ const S={
   outlineBtn:{background:"transparent",color:"#1E293B",border:"1px solid #CBD5E1",borderRadius:9,padding:"7px 14px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"},
   dangerBtn: {background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:9,padding:"7px 14px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"},
   navBtn:    {background:"#F1F5F9",border:"none",borderRadius:8,padding:"7px 14px",fontSize:16,cursor:"pointer",color:"#475569"},
-  input:     {width:"100%",border:"1px solid #E2E8F0",borderRadius:8,padding:"8px 11px",fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",background:"#FAFAFA",color:"#1E293B"},
+  input:     {width:"100%",border:"1px solid #E2E8F0",borderRadius:8,padding:"8px 11px",fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",background:"#FAFAFA",color:"#1E293B",height:38,boxSizing:"border-box"},
   modal:     {background:"#fff",borderRadius:16,width:"100%",maxWidth:480,boxShadow:"0 20px 60px rgba(0,0,0,.25)",maxHeight:"92vh",display:"flex",flexDirection:"column"},
   modalHeader:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:"1px solid #E2E8F0"},
   modalTitle:{fontFamily:"'Inter',sans-serif",fontSize:17,fontWeight:700,color:"#1E293B"},
