@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import "./App.css";
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
 const supabase = createClient(
@@ -51,12 +52,6 @@ function addDays(d,n) { const x=new Date(d); x.setDate(x.getDate()+n); return x;
 function nightsBetween(a,b) { return Math.round((new Date(b)-new Date(a))/86400000); }
 
 // ── CSV Export ────────────────────────────────────────────────────────────────
-// This function takes all bookings + rooms and downloads a .csv file.
-// How it works:
-//   1. Define which columns we want and their human-readable headers
-//   2. For each booking, build a row of values in the same order
-//   3. Escape any value that contains a comma or quote (CSV spec)
-//   4. Join everything into a string, create a temporary link, click it to download
 function exportBookingsToCSV(bookings, rooms) {
   const headers = [
     "ID", "Гост", "Телефон", "Имейл", "Националност",
@@ -96,11 +91,10 @@ function exportBookingsToCSV(bookings, rooms) {
     ];
   });
 
-  // Wrap a cell value in quotes if it contains a comma, quote, or newline
   const escape = val => {
     const s = String(val);
     return s.includes(",") || s.includes('"') || s.includes("\n")
-      ? `"${s.replace(/"/g, '""')}"` // double up any internal quotes
+      ? `"${s.replace(/"/g, '""')}"` 
       : s;
   };
 
@@ -109,9 +103,7 @@ function exportBookingsToCSV(bookings, rooms) {
     ...rows.map(row => row.map(escape).join(","))
   ].join("\n");
 
-  // Create an invisible <a> tag, set its href to the CSV data, click it, remove it
-  // This is the standard browser trick for triggering a file download from JavaScript
-  const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" }); // \uFEFF = BOM for Excel UTF-8
+  const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -119,14 +111,14 @@ function exportBookingsToCSV(bookings, rooms) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url); // free the memory
+  URL.revokeObjectURL(url);
 }
 
 // ── Supabase data operations ──────────────────────────────────────────────────
 async function dbUpsert(table, record) {
   const { error } = await supabase.from(table).upsert(record);
   if (error) console.error(`Error upserting into ${table}:`, error);
-  return !error; // returns true on success, false on failure
+  return !error;
 }
 async function dbDelete(table, id) {
   const { error } = await supabase.from(table).delete().eq("id", id);
@@ -140,13 +132,10 @@ async function dbSelect(table) {
 }
 
 // ── Toast component ───────────────────────────────────────────────────────────
-// A small notification bar that appears at the top-right, then fades away.
-// Props:
-//   toasts: array of { id, message, type } where type is "success" | "error"
 function ToastContainer({ toasts }) {
   if (!toasts.length) return null;
   return (
-    <div style={{ position:"fixed", top:16, right:16, zIndex:9999, display:"flex", flexDirection:"column", gap:8, pointerEvents:"none" }}>
+    <div style={{ position:"fixed", top:16, right:16, left:16, zIndex:9999, display:"flex", flexDirection:"column", gap:8, pointerEvents:"none", maxWidth:400, marginLeft:"auto" }}>
       {toasts.map(t => (
         <div key={t.id} style={{
           background: t.type === "error" ? "#FEE2E2" : "#DCFCE7",
@@ -167,15 +156,11 @@ function ToastContainer({ toasts }) {
           {t.message}
         </div>
       ))}
-      {/* Inline keyframe — avoids needing a separate CSS file */}
-      <style>{`@keyframes toastIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }`}</style>
     </div>
   );
 }
 
 // ── Nationality list ──────────────────────────────────────────────────────────
-// A static list of countries in Bulgarian. Kept here near the top so it's easy
-// to extend later (e.g. add "Непознато" or custom entries).
 const NATIONALITIES = [
   "Австрия","Австралия","Азербайджан","Албания","Алжир","Аржентина","Армения",
   "Беларус","Белгия","Босна и Херцеговина","Бразилия","България",
@@ -192,22 +177,13 @@ const NATIONALITIES = [
 ];
 
 // ── NationalitySelect ─────────────────────────────────────────────────────────
-// A searchable dropdown for nationality.
-// How it works:
-//   - Shows a text input. When focused, a dropdown list appears below it.
-//   - The list is filtered in real-time as the user types (case-insensitive).
-//   - Clicking an option sets the value and closes the dropdown.
-//   - Clicking outside also closes the dropdown (via a mousedown listener on document).
-//   - The user can also just type a free-form value if their country isn't listed.
 function NationalitySelect({ value, onChange, inputStyle }) {
   const [query, setQuery]   = useState(value || "");
   const [open,  setOpen]    = useState(false);
   const ref = useRef();
 
-  // Keep the text box in sync if the parent resets the value (e.g. editing an existing booking)
   useEffect(() => { setQuery(value || ""); }, [value]);
 
-  // Close dropdown when clicking anywhere outside this component
   useEffect(() => {
     function handleClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
@@ -228,7 +204,7 @@ function NationalitySelect({ value, onChange, inputStyle }) {
 
   function handleInput(e) {
     setQuery(e.target.value);
-    onChange(e.target.value); // allow free-form entry too
+    onChange(e.target.value);
     setOpen(true);
   }
 
@@ -242,7 +218,6 @@ function NationalitySelect({ value, onChange, inputStyle }) {
         placeholder="Търси или въведи националност…"
         autoComplete="off"
       />
-      {/* Small arrow indicator */}
       <span style={{
         position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
         fontSize:10, color:"#94A3B8", pointerEvents:"none"
@@ -257,7 +232,7 @@ function NationalitySelect({ value, onChange, inputStyle }) {
           {filtered.map(n => (
             <div
               key={n}
-              onMouseDown={e => { e.preventDefault(); select(n); }} // preventDefault keeps input focused until we're done
+              onMouseDown={e => { e.preventDefault(); select(n); }}
               style={{
                 padding:"8px 12px", fontSize:13, cursor:"pointer",
                 color: n === value ? "#D97706" : "#1E293B",
@@ -338,21 +313,16 @@ export default function App() {
 
   const [guests,   setGuests]   = useState([]);
   const [view, setView] = useState(()=>localStorage.getItem("hoteldesk_view")||"calendar");
-  function navigate(v){ setView(v); localStorage.setItem("hoteldesk_view",v); }
+  function navigate(v){ setView(v); localStorage.setItem("hoteldesk_view",v); setSidebarOpen(false); }
   const [modal,    setModal]    = useState(null);
   const [calYear,  setCalYear]  = useState(new Date().getFullYear());
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
   const [calFilter,  setCalFilter]  = useState([]);
   const [bkgFilter,  setBkgFilter]  = useState([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // ── Toast state ─────────────────────────────────────────────────────────────
-  // toasts is an array so multiple toasts can stack if actions happen quickly.
-  // Each toast has: { id (unique number), message (string), type ("success"|"error") }
   const [toasts, setToasts] = useState([]);
 
-  // showToast adds a toast and automatically removes it after 3 seconds.
-  // The "prev" pattern ensures we never accidentally lose a toast that was
-  // added at almost the same millisecond.
   function showToast(message, type = "success") {
     const id = Date.now();
     setToasts(prev => [...prev, { id, message, type }]);
@@ -361,7 +331,6 @@ export default function App() {
     }, 3000);
   }
 
-  // Load all data from Supabase on mount
   useEffect(()=>{
     (async()=>{
       const [u, r, b, g] = await Promise.all([
@@ -373,7 +342,6 @@ export default function App() {
       if (!u.length) { await Promise.all(DEFAULT_USERS.map(x => dbUpsert("users", x))); setUsers(DEFAULT_USERS); } else { setUsers(u); }
       if (!r.length) { await Promise.all(DEFAULT_ROOMS.map(x => dbUpsert("rooms", x))); setRooms(DEFAULT_ROOMS); } else { setRooms(r); }
 
-      // ── Guest migration ────────────────────────────────────────────
       let guestList = [...g];
       const updatedBookings = [...b];
       const bookingsWithoutGuest = b.filter(bk => !bk.guestId && bk.phone);
@@ -397,7 +365,6 @@ export default function App() {
   },[]);
 
 
-  // ── Data helpers ─────────────────────────────────────────────────────────────
   async function saveUser(u) {
     const ok = await dbUpsert("users", u);
     if (ok) {
@@ -440,9 +407,7 @@ export default function App() {
 
   async function updateGuestStats(guestId, updatedBookings) {
     const gBkgs = updatedBookings.filter(b => b.guestId === guestId && b.status !== "cancelled");
-    // totalSpent = sum of every room's price (each booking record holds its own room price)
     const totalSpent = gBkgs.reduce((s, b) => s + Number(b.totalPrice || 0), 0);
-    // totalStays = number of unique reservations — a multi-room group counts as ONE stay
     const seenGroups = new Set();
     const totalStays = gBkgs.filter(b => {
       if (!b.groupId) return true;
@@ -459,13 +424,9 @@ export default function App() {
     }));
   }
 
-  // ── saveGroupBookingDirect ───────────────────────────────────────────────────
-  // Called after the guest conflict modal resolves — guestId is already known,
-  // so we skip guest resolution and go straight to writing the booking records.
   async function saveGroupBookingDirect(shared, roomsList, guestId) {
     const groupId = roomsList.length > 1 ? (shared.groupId || `grp_${Date.now()}`) : null;
     const depositAmount = shared.depositReceived ? Number(shared.depositAmount) || 0 : 0;
-    // Dates are now shared — nights is the same for every room in the group
     const nights = shared.checkIn&&shared.checkOut ? nightsBetween(shared.checkIn, shared.checkOut) : 0;
     const grandTotal = roomsList.reduce((s, r) => {
       return s + (nights > 0 ? Math.round(nights * Number(r.pricePerNight)) : 0);
@@ -504,7 +465,6 @@ export default function App() {
       savedRecords.push(record);
     }
 
-    // Merge saved records back into the bookings state array
     let updated = [...bookings];
     for (const rec of savedRecords) {
       const exists = updated.findIndex(x => x.id === rec.id);
@@ -515,34 +475,23 @@ export default function App() {
     return true;
   }
 
-  // ── saveGroupBooking ─────────────────────────────────────────────────────────
-  // Main save function called by the booking modal.
-  //   shared   — the fields common to the whole reservation (guest info, status, deposit…)
-  //   roomsList — array of { bookingId, roomId, checkIn, checkOut, pricePerNight }
-  //   onConflict — called when a phone number matches a different guest name
-  //
-  // Returns true on success (so the modal knows to close), false on failure/conflict.
   async function saveGroupBooking(shared, roomsList, onConflict) {
     let guestId = shared.guestId;
 
-    // ── Guest resolution (same logic as before, just once per reservation) ──
     if (shared.phone) {
       const phone = shared.phone.trim();
       const existing = guests.find(g => g.phone?.trim() === phone);
       if (existing) {
         if (existing.name.trim().toLowerCase() !== shared.guestName.trim().toLowerCase()) {
-          // Name mismatch → let the conflict modal decide, then return false here
           if (onConflict) { onConflict(existing, shared, roomsList); return false; }
         }
         guestId = existing.id;
-        // If nationality has been updated for this booking, persist it on the guest too
         if (shared.nationality && shared.nationality !== existing.nationality) {
           const updatedGuest = { ...existing, nationality: shared.nationality };
           await dbUpsert("guests", updatedGuest);
           setGuests(prev => prev.map(g => g.id === existing.id ? updatedGuest : g));
         }
       } else {
-        // Brand new guest — create a profile automatically
         const newGuest = {
           id: `g${Date.now()}`, name: shared.guestName, phone,
           email: shared.email||"", nationality: shared.nationality||"",
@@ -563,7 +512,6 @@ export default function App() {
   }
 
   async function cancelBooking(b) {
-    // If this booking belongs to a group, cancel every room in that group
     const toCancel = b.groupId
       ? bookings.filter(x => x.groupId === b.groupId)
       : [b];
@@ -576,7 +524,6 @@ export default function App() {
   }
 
   async function removeBooking(b) {
-    // b is the full booking object (not just an id)
     const toDelete = b.groupId
       ? bookings.filter(x => x.groupId === b.groupId)
       : [b];
@@ -604,39 +551,39 @@ export default function App() {
 
   return (
     <div style={{display:"flex",height:"100vh",fontFamily:"'Inter',sans-serif",background:"#F8FAFC",overflow:"hidden"}}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0;}
-        html,body,#root{width:100%;height:100%;}
-        body{font-family:'Inter',sans-serif;}
-        ::-webkit-scrollbar{width:6px;height:6px;}
-        ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}
-        input,select,textarea{font-family:inherit;}
-        .nbtn:hover{background:rgba(255,255,255,.08)!important;color:#E2E8F0!important;}
-        .rowhov:hover td{background:#F8FAFC!important;}
-        .tlc:hover{background:#EFF6FF!important;}
-
-        /* Fix 1: Date input calendar icon — force light color-scheme so the
-           browser renders the calendar icon in dark gray instead of white.
-           color-scheme controls whether the browser's native widgets (date pickers,
-           scrollbars, checkboxes) render in light or dark mode. */
-        input[type="date"] { color-scheme: light; }
-
-        /* Fix 2: Checkboxes — same root cause. The dark sidebar sets a dark
-           color-scheme on the whole page which propagates to all native inputs.
-           Resetting it to "light" on checkboxes gives them a white background. */
-        input[type="checkbox"] { color-scheme: light; }
-      `}</style>
-
-      {/* Toast notifications — rendered on top of everything */}
       <ToastContainer toasts={toasts} />
 
+      {/* Sidebar overlay for mobile */}
+      {sidebarOpen && (
+        <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* SIDEBAR */}
-      <aside style={{width:220,background:"#1E293B",display:"flex",flexDirection:"column",flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,padding:"20px 16px",borderBottom:"1px solid rgba(255,255,255,.07)"}}>
-          <span style={{fontSize:26}}>🏨</span>
-          <div><div style={{fontFamily:"'Inter',sans-serif",fontSize:17,fontWeight:700,color:"#F1F5F9"}}>HotelDesk</div>
-          <div style={{fontSize:10,color:"#475569",textTransform:"uppercase",letterSpacing:".08em",marginTop:2}}>Управление</div></div>
+      <aside style={{
+        width: 220,
+        background: "#1E293B",
+        display: "flex",
+        flexDirection: "column",
+        flexShrink: 0,
+        position: window.innerWidth <= 768 ? "fixed" : "relative",
+        left: window.innerWidth <= 768 ? (sidebarOpen ? 0 : -220) : 0,
+        top: 0,
+        bottom: 0,
+        zIndex: 99,
+        transition: "left 0.3s ease"
+      }}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"20px 16px",borderBottom:"1px solid rgba(255,255,255,.07)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:26}}>🏨</span>
+            <div><div style={{fontFamily:"'Inter',sans-serif",fontSize:17,fontWeight:700,color:"#F1F5F9"}}>HotelDesk</div>
+            <div style={{fontSize:10,color:"#475569",textTransform:"uppercase",letterSpacing:".08em",marginTop:2}}>Управление</div></div>
+          </div>
+          <button 
+            className="mobile-only"
+            onClick={() => setSidebarOpen(false)} 
+            style={{background:"transparent",border:"none",color:"#94A3B8",fontSize:24,cursor:"pointer",padding:0,lineHeight:1}}>
+            ×
+          </button>
         </div>
         <nav style={{flex:1,padding:"12px 8px",display:"flex",flexDirection:"column",gap:2}}>
           {navItems.map(item=>(
@@ -657,57 +604,70 @@ export default function App() {
       </aside>
 
       {/* MAIN */}
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-        <header style={{height:54,background:"#fff",borderBottom:"1px solid #E2E8F0",display:"flex",alignItems:"center",padding:"0 22px",gap:14,flexShrink:0}}>
-          <h1 style={{fontFamily:"'Inter',sans-serif",fontSize:19,fontWeight:700,color:"#1E293B",flex:1}}>{navItems.find(n=>n.id===view)?.label}</h1>
-          {(view==="calendar"||view==="bookings") && <button onClick={()=>setModal({type:"booking",data:{}})} style={S.primaryBtn}>+ Нова резервация</button>}
-          {/* CSV Export button — only shown on the Bookings view */}
-          {view==="bookings" && (
-            <button
-              onClick={() => exportBookingsToCSV(bookings, rooms)}
-              style={{ ...S.outlineBtn, display:"flex", alignItems:"center", gap:6 }}
-              title="Изтегли всички резервации като CSV файл"
-            >
-              ↓ Експорт CSV
-            </button>
-          )}
-          {view==="rooms" && <button onClick={()=>setModal({type:"room",data:{}})} style={S.primaryBtn}>+ Добави стая</button>}
-
-          {view==="staff"&&user.role==="admin" && <button onClick={()=>setModal({type:"staff",data:{}})} style={S.primaryBtn}>+ Добави служител</button>}
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",marginLeft:window.innerWidth <= 768 ? 0 : undefined}}>
+        <header style={{height:54,background:"#fff",borderBottom:"1px solid #E2E8F0",display:"flex",alignItems:"center",padding:"0 16px",gap:14,flexShrink:0}}>
+          <button 
+            className="mobile-only hamburger"
+            onClick={() => setSidebarOpen(true)}
+            style={{background:"transparent",border:"none",marginRight:4}}>
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <h1 style={{fontFamily:"'Inter',sans-serif",fontSize:window.innerWidth <= 768 ? 16 : 19,fontWeight:700,color:"#1E293B",flex:1}}>{navItems.find(n=>n.id===view)?.label}</h1>
+          <div className="mobile-header-actions">
+            {(view==="calendar"||view==="bookings") && <button onClick={()=>setModal({type:"booking",data:{}})} style={{...S.primaryBtn,fontSize:window.innerWidth <= 768 ? 12 : 13,padding:window.innerWidth <= 768 ? "6px 10px" : "8px 16px"}}>+ {window.innerWidth <= 768 ? "Нова" : "Нова резервация"}</button>}
+            {view==="bookings" && window.innerWidth > 768 && (
+              <button
+                onClick={() => exportBookingsToCSV(bookings, rooms)}
+                style={{ ...S.outlineBtn, display:"flex", alignItems:"center", gap:6 }}
+                title="Изтегли всички резервации като CSV файл"
+              >
+                ↓ Експорт CSV
+              </button>
+            )}
+            {view==="rooms" && <button onClick={()=>setModal({type:"room",data:{}})} style={{...S.primaryBtn,fontSize:window.innerWidth <= 768 ? 12 : 13,padding:window.innerWidth <= 768 ? "6px 10px" : "8px 16px"}}>+ {window.innerWidth <= 768 ? "Стая" : "Добави стая"}</button>}
+            {view==="staff"&&user.role==="admin" && <button onClick={()=>setModal({type:"staff",data:{}})} style={{...S.primaryBtn,fontSize:window.innerWidth <= 768 ? 12 : 13,padding:window.innerWidth <= 768 ? "6px 10px" : "8px 16px"}}>+ {window.innerWidth <= 768 ? "Служител" : "Добави служител"}</button>}
+          </div>
         </header>
 
-        <div style={{flex:1,overflow:"auto",padding:"20px 22px"}}>
+        <div style={{flex:1,overflow:"auto",padding:window.innerWidth <= 768 ? "12px" : "20px 22px"}}>
 
           {/* ══ CALENDAR ══════════════════════════════════════════════ */}
           {view==="calendar" && <>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+            <div className="stats-grid" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
               {[["Общо стаи",`${rooms.length}`,"в хотела"],["Заети днес",`${occupied}`,`от ${rooms.length} стаи`],["Резервации",`${monthCount}`,`за ${BG_MONTHS[calMonth]}`],["Приходи",`€${monthRev.toLocaleString()}`,"потвърдени"]].map(([l,v,s])=>(
                 <div key={l} style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
                   <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.2px",textTransform:"uppercase",color:"#94A3B8",marginBottom:6}}>{l}</div>
-                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:26,color:"#1E293B"}}>{v}</div>
+                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:window.innerWidth <= 768 ? 20 : 26,color:"#1E293B"}}>{v}</div>
                   <div style={{fontSize:12,color:"#D97706",fontWeight:600,marginTop:4}}>{s}</div>
                 </div>
               ))}
             </div>
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
               <button onClick={()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);}} style={S.navBtn}>‹</button>
-              <span style={{fontFamily:"'Inter',sans-serif",fontSize:20,fontWeight:700,color:"#1E293B",minWidth:200,textAlign:"center"}}>{BG_MONTHS[calMonth]} {calYear}</span>
+              <span style={{fontFamily:"'Inter',sans-serif",fontSize:window.innerWidth <= 768 ? 16 : 20,fontWeight:700,color:"#1E293B",minWidth:window.innerWidth <= 768 ? 150 : 200,textAlign:"center"}}>{BG_MONTHS[calMonth]} {calYear}</span>
               <button onClick={()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);}} style={S.navBtn}>›</button>
-              <MultiSelect label="Стаи" options={rooms} selected={calFilter} onChange={setCalFilter}/>
+              {window.innerWidth > 768 && <MultiSelect label="Стаи" options={rooms} selected={calFilter} onChange={setCalFilter}/>}
               <button onClick={()=>{const t=new Date();setCalMonth(t.getMonth());setCalYear(t.getFullYear());}} style={{...S.navBtn,marginLeft:"auto"}}>Днес</button>
             </div>
+            {window.innerWidth <= 768 && (
+              <div style={{marginBottom:12}}>
+                <MultiSelect label="Стаи" options={rooms} selected={calFilter} onChange={setCalFilter}/>
+              </div>
+            )}
 
             <div style={{overflowX:"auto",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.06)",border:"1px solid #E2E8F0",background:"#fff"}}>
               <table style={{borderCollapse:"collapse",minWidth:"100%"}}>
                 <thead>
                   <tr>
-                    <th style={{background:"#1E293B",color:"#94A3B8",padding:"10px 14px",fontSize:12,fontWeight:600,textAlign:"left",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:3,minWidth:130,borderRight:"1px solid #0f1a27"}}>Стая</th>
+                    <th style={{background:"#1E293B",color:"#94A3B8",padding:"10px 14px",fontSize:12,fontWeight:600,textAlign:"left",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:3,minWidth:window.innerWidth <= 768 ? 80 : 130,borderRight:"1px solid #0f1a27"}}>Стая</th>
                     {days.map(d=>{
                       const ds=`${calYear}-${pad(calMonth+1)}-${pad(d)}`;
                       const isToday=ds===today;
                       const dow=new Date(ds).getDay();
                       const isWe=dow===0||dow===6;
-                      return <th key={d} style={{background:isToday?"#D97706":isWe?"#243150":"#1E293B",color:isToday?"#fff":isWe?"#94A3B8":"#64748B",padding:"6px 2px",fontSize:10,fontWeight:700,textAlign:"center",minWidth:32,width:32,borderRight:"1px solid #0f1a27"}}>{d}</th>;
+                      return <th key={d} style={{background:isToday?"#D97706":isWe?"#243150":"#1E293B",color:isToday?"#fff":isWe?"#94A3B8":"#64748B",padding:"6px 2px",fontSize:10,fontWeight:700,textAlign:"center",minWidth:window.innerWidth <= 768 ? 28 : 32,width:window.innerWidth <= 768 ? 28 : 32,borderRight:"1px solid #0f1a27"}}>{d}</th>;
                     })}
                   </tr>
                 </thead>
@@ -717,8 +677,6 @@ export default function App() {
                     const monthEnd=`${calYear}-${pad(calMonth+1)}-${pad(daysInMonth)}`;
                     const rBkgs=bookings.filter(b=>b.roomId===room.id&&b.status!=="cancelled"&&b.checkOut>monthStart&&b.checkIn<=monthEnd);
 
-                    // Build a map: day number → booking that occupies it (for quick lookup)
-                    // A booking "occupies" day d if checkIn <= ds < checkOut
                     const dayBooking={};
                     rBkgs.forEach(b=>{
                       days.forEach(d=>{
@@ -727,10 +685,6 @@ export default function App() {
                       });
                     });
 
-                    // Build the cells for this row.
-                    // We iterate day-by-day. When we hit the START of a booking we emit
-                    // one wide <td colspan={N}>. For every subsequent day inside that same
-                    // booking we emit nothing (those cells are consumed by the colspan).
                     const cells=[];
                     let d=1;
                     while(d<=daysInMonth){
@@ -739,31 +693,24 @@ export default function App() {
                       const b=dayBooking[d];
 
                       if(!b){
-                        // Empty cell — no booking on this day
                         cells.push(
                           <td key={d} className="tlc"
                             onClick={()=>setModal({type:"booking",data:{roomId:room.id,checkIn:ds}})}
                             title="Натиснете за резервация"
-                            style={{background:isToday?"#FFFBEB":"transparent",borderRight:"1px solid #F1F5F9",height:36,padding:0,verticalAlign:"middle",cursor:"pointer",transition:"background .1s",minWidth:32,width:32}}>
+                            style={{background:isToday?"#FFFBEB":"transparent",borderRight:"1px solid #F1F5F9",height:36,padding:0,verticalAlign:"middle",cursor:"pointer",transition:"background .1s",minWidth:window.innerWidth <= 768 ? 28 : 32,width:window.innerWidth <= 768 ? 28 : 32}}>
                           </td>
                         );
                         d++;
                       } else {
-                        // This day is the START of a booking block (either real start or month boundary).
-                        // Count how many consecutive days this booking occupies from here.
-                        // We cap at the end of the month.
                         let span=0;
                         let dd=d;
                         while(dd<=daysInMonth&&dayBooking[dd]?.id===b.id){
                           span++;
                           dd++;
                         }
-                        // Is this a "continues from previous month" booking?
                         const continuesFromPrev = b.checkIn < monthStart;
-                        // Does this booking continue into next month?
                         const continuesNext = b.checkOut > monthEnd;
 
-                        // Border radius: left rounded if starts this month, right rounded if ends this month
                         const borderRadius=`${continuesFromPrev?0:5}px ${continuesNext?0:5}px ${continuesNext?0:5}px ${continuesFromPrev?0:5}px`;
 
                         cells.push(
@@ -777,12 +724,10 @@ export default function App() {
                               padding:"0 7px",
                               verticalAlign:"middle",
                               cursor:"pointer",
-                              // Right border only if booking ends within the month (so the gap shows)
                               borderRight:continuesNext?"none":"2px solid #fff",
-                              // Left border to visually separate from the previous empty cell
                               borderLeft:continuesFromPrev?"none":"2px solid #fff",
                               overflow:"hidden",
-                              maxWidth:0, // forces text-overflow to work inside a td
+                              maxWidth:0,
                             }}>
                             <span style={{color:"#fff",fontSize:10,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"block"}}>
                               {b.groupId?"🔗 ":""}{b.guestName}
@@ -798,7 +743,7 @@ export default function App() {
                         <td style={{background:"#F8FAFC",padding:"7px 14px",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:2,borderRight:"1px solid #E2E8F0",verticalAlign:"middle"}}>
                           <div style={{display:"flex",alignItems:"center",gap:7}}>
                             <span style={{width:8,height:8,borderRadius:"50%",background:room.color,flexShrink:0}}/>
-                            <div><div style={{fontWeight:700,fontSize:12,color:"#1E293B"}}>{room.name}</div><div style={{fontSize:10,color:"#94A3B8"}}>{room.type}</div></div>
+                            <div><div style={{fontWeight:700,fontSize:window.innerWidth <= 768 ? 11 : 12,color:"#1E293B"}}>{room.name}</div>{window.innerWidth > 768 && <div style={{fontSize:10,color:"#94A3B8"}}>{room.type}</div>}</div>
                           </div>
                         </td>
                         {cells}
@@ -809,7 +754,7 @@ export default function App() {
                 </tbody>
               </table>
             </div>
-            <p style={{marginTop:10,fontSize:12,color:"#94A3B8",textAlign:"center"}}>Натиснете клетка за нова резервация · Натиснете резервация за преглед</p>
+            <p style={{marginTop:10,fontSize:window.innerWidth <= 768 ? 11 : 12,color:"#94A3B8",textAlign:"center"}}>Натиснете клетка за нова резервация · Натиснете резервация за преглед</p>
           </>}
 
           {/* ══ BOOKINGS ══════════════════════════════════════════════ */}
@@ -817,17 +762,25 @@ export default function App() {
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
               <span style={{fontSize:14,color:"#64748B"}}>{visBkgList.length} резервации</span>
               <MultiSelect label="Стаи" options={rooms} selected={bkgFilter} onChange={setBkgFilter}/>
+              {window.innerWidth <= 768 && (
+                <button
+                  onClick={() => exportBookingsToCSV(bookings, rooms)}
+                  style={{ ...S.outlineBtn, fontSize:12, padding:"6px 10px" }}
+                >
+                  ↓ CSV
+                </button>
+              )}
             </div>
             <div style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
               {visBkgList.length===0
                 ? <div style={{textAlign:"center",padding:52,color:"#CBD5E1",fontSize:15}}>Няма резервации</div>
-                : <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                    <thead><tr>{["Гост","Стая","Настаняване","Напускане","Нощ.","Депозит","Статус",""].map(h=>(
-                      <th key={h} style={{textAlign:"left",padding:"10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0"}}>{h}</th>
+                : <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:window.innerWidth <= 768 ? 12 : 13}}>
+                    <thead><tr>{(window.innerWidth <= 768 ? ["Гост","Стая","Дати","Статус",""] : ["Гост","Стая","Настаняване","Напускане","Нощ.","Депозит","Статус",""]).map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:window.innerWidth <= 768 ? "8px 10px" : "10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0",whiteSpace:"nowrap"}}>{h}</th>
                     ))}</tr></thead>
                     <tbody>
                       {(()=>{
-                        // Collapse grouped bookings: show one row per group
                         const seen=new Set();
                         return visBkgList.filter(b=>{
                           if(!b.groupId) return true;
@@ -836,39 +789,48 @@ export default function App() {
                         }).map(b=>{
                           const room=rooms.find(r=>r.id===b.roomId);
                           const st=STATUS_MAP[b.status]||STATUS_MAP.confirmed;
-                          // For groups, count how many rooms are in this reservation
                           const groupSize=b.groupId?bookings.filter(x=>x.groupId===b.groupId).length:1;
                           return (
                             <tr key={b.id} className="rowhov" style={{borderBottom:"1px solid #F1F5F9"}}>
-                              <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{b.guestName}</td>
-                              <td style={{padding:"12px 14px"}}>
+                              <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px",fontWeight:600,color:"#1E293B",whiteSpace:"nowrap"}}>{b.guestName}</td>
+                              <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px"}}>
                                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                                   <div>
-                                    <div style={{fontWeight:600,color:"#1E293B"}}>{room?.name||"—"}</div>
-                                    <div style={{fontSize:11,color:"#94A3B8"}}>{room?.type||""}</div>
+                                    <div style={{fontWeight:600,color:"#1E293B",fontSize:window.innerWidth <= 768 ? 11 : 13}}>{room?.name||"—"}</div>
+                                    {window.innerWidth > 768 && <div style={{fontSize:11,color:"#94A3B8"}}>{room?.type||""}</div>}
                                   </div>
-                                  {groupSize>1&&<span style={{fontSize:10,fontWeight:700,background:"#EFF6FF",color:"#1D4ED8",borderRadius:6,padding:"2px 6px",whiteSpace:"nowrap"}}>+{groupSize-1} стая</span>}
+                                  {groupSize>1&&<span style={{fontSize:10,fontWeight:700,background:"#EFF6FF",color:"#1D4ED8",borderRadius:6,padding:"2px 6px",whiteSpace:"nowrap"}}>+{groupSize-1}</span>}
                                 </div>
                               </td>
-                              <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkIn}</td>
-                              <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkOut}</td>
-                              <td style={{padding:"12px 14px",color:"#374151"}}>{nightsBetween(b.checkIn,b.checkOut)}</td>
-                              <td style={{padding:"12px 14px"}}>{b.depositReceived?<span style={{color:"#166534",fontWeight:600}}>€{b.depositAmount}</span>:<span style={{color:"#94A3B8"}}>—</span>}</td>
-                              <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span></td>
-                              <td style={{padding:"12px 14px"}}><button onClick={()=>setModal({type:"viewBooking",data:b})} style={S.outlineBtn}>Преглед</button></td>
+                              {window.innerWidth <= 768 ? (
+                                <td style={{padding:"10px 8px",color:"#374151",fontSize:11,whiteSpace:"nowrap"}}>
+                                  <div>{b.checkIn}</div>
+                                  <div>{b.checkOut}</div>
+                                </td>
+                              ) : (
+                                <>
+                                  <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkIn}</td>
+                                  <td style={{padding:"12px 14px",color:"#374151"}}>{b.checkOut}</td>
+                                  <td style={{padding:"12px 14px",color:"#374151"}}>{nightsBetween(b.checkIn,b.checkOut)}</td>
+                                  <td style={{padding:"12px 14px"}}>{b.depositReceived?<span style={{color:"#166534",fontWeight:600}}>€{b.depositAmount}</span>:<span style={{color:"#94A3B8"}}>—</span>}</td>
+                                </>
+                              )}
+                              <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px"}}><span style={{fontSize:window.innerWidth <= 768 ? 10 : 11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color,whiteSpace:"nowrap"}}>{st.label}</span></td>
+                              <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px"}}><button onClick={()=>setModal({type:"viewBooking",data:b})} style={{...S.outlineBtn,fontSize:window.innerWidth <= 768 ? 11 : 13,padding:window.innerWidth <= 768 ? "5px 10px" : "7px 14px"}}>Преглед</button></td>
                             </tr>
                           );
                         });
                       })()}
                     </tbody>
                   </table>
+                </div>
               }
             </div>
           </>}
 
           {/* ══ ROOMS ═════════════════════════════════════════════════ */}
           {view==="rooms" && (
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:16}}>
+            <div style={{display:"grid",gridTemplateColumns:window.innerWidth <= 768 ? "1fr" : "repeat(auto-fill,minmax(240px,1fr))",gap:16}}>
               {rooms.map(room=>(
                 <div key={room.id} style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)",display:"flex",flexDirection:"column"}}>
                   <div style={{height:5,background:room.color}}/>
@@ -876,7 +838,7 @@ export default function App() {
                     <div style={{fontFamily:"'Inter',sans-serif",fontWeight:700,fontSize:15,color:"#1E293B"}}>{room.name}</div>
                     <div style={{fontSize:11,color:"#94A3B8",textTransform:"uppercase",letterSpacing:".06em",margin:"3px 0 10px"}}>{room.type}</div>
                   </div>
-                  <div style={{padding:"12px 16px",borderTop:"1px solid #F1F5F9",display:"flex",gap:8}}>
+                  <div className="action-buttons" style={{padding:"12px 16px",borderTop:"1px solid #F1F5F9",display:"flex",gap:8}}>
                     <button onClick={()=>setModal({type:"room",data:{...room}})} style={S.outlineBtn}>Редактирай</button>
                     {user.role==="admin"&&<button onClick={()=>{if(confirm("Изтриете тази стая?")) removeRoom(room.id);}} style={S.dangerBtn}>Изтрий</button>}
                   </div>
@@ -888,18 +850,20 @@ export default function App() {
 
           {/* ══ STAFF ════════════════════════════════════════════════ */}
           {view==="staff"&&user.role==="admin" && (
-            <div style={{maxWidth:600,background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                <thead><tr>{["Иmе","Потребителско иmе","Роля",""].map(h=><th key={h} style={{textAlign:"left",padding:"10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0"}}>{h}</th>)}</tr></thead>
+            <div style={{maxWidth:window.innerWidth <= 768 ? "100%" : 600,background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:window.innerWidth <= 768 ? 12 : 13}}>
+                <thead><tr>{["Иmе","Потребителско иmе","Роля",""].map(h=><th key={h} style={{textAlign:"left",padding:window.innerWidth <= 768 ? "8px 10px" : "10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0"}}>{h}</th>)}</tr></thead>
                 <tbody>{users.map(u=>(
                   <tr key={u.id} className="rowhov" style={{borderBottom:"1px solid #F1F5F9"}}>
-                    <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{u.name}</td>
-                    <td style={{padding:"12px 14px",color:"#374151"}}>{u.username}</td>
-                    <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:u.role==="admin"?"#DCFCE7":"#F1F5F9",color:u.role==="admin"?"#166534":"#475569"}}>{u.role==="admin"?"Администратор":"Служител"}</span></td>
-                    <td style={{padding:"12px 14px"}}>{u.id!==user.id&&<button onClick={()=>{if(confirm("Премахнете служителя?")) removeUser(u.id);}} style={S.dangerBtn}>Премахни</button>}</td>
+                    <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px",fontWeight:600,color:"#1E293B"}}>{u.name}</td>
+                    <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px",color:"#374151"}}>{u.username}</td>
+                    <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px"}}><span style={{fontSize:window.innerWidth <= 768 ? 10 : 11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:u.role==="admin"?"#DCFCE7":"#F1F5F9",color:u.role==="admin"?"#166534":"#475569"}}>{u.role==="admin"?"Администратор":"Служител"}</span></td>
+                    <td style={{padding:window.innerWidth <= 768 ? "10px 8px" : "12px 14px"}}>{u.id!==user.id&&<button onClick={()=>{if(confirm("Премахнете служителя?")) removeUser(u.id);}} style={{...S.dangerBtn,fontSize:window.innerWidth <= 768 ? 11 : 13,padding:window.innerWidth <= 768 ? "5px 10px" : "7px 14px"}}>Премахни</button>}</td>
                   </tr>
                 ))}</tbody>
               </table>
+              </div>
             </div>
           )}
           {/* ══ GUESTS ════════════════════════════════════════════════ */}
@@ -914,7 +878,6 @@ export default function App() {
           onClick={e=>{if(e.target===e.currentTarget)setModal(null);}}>
           {modal.type==="booking"&&<BookingModal rooms={rooms} bookings={bookings} initial={modal.data} user={user}
             onSave={async ({shared, rooms:roomsList})=>{
-              // saveGroupBooking returns true on success, false if a conflict modal was triggered
               const success = await saveGroupBooking(
                 shared,
                 roomsList,
@@ -926,7 +889,6 @@ export default function App() {
           {modal.type==="guestConflict"&&<GuestConflictModal
             existingGuest={modal.existingGuest} booking={{...modal.shared}}
             onUseExisting={async ()=>{
-              // User chose to link to the existing guest — save directly with that guestId
               const ok = await saveGroupBookingDirect(modal.shared, modal.rooms, modal.existingGuest.id);
               if (ok) {
                 showToast("Резервацията е свързана с existing госта.");
@@ -936,7 +898,6 @@ export default function App() {
               }
             }}
             onCreateNew={async ()=>{
-              // User wants a fresh guest profile
               const ng={id:`g${Date.now()}`,name:modal.shared.guestName,phone:modal.shared.phone,email:modal.shared.email||"",status:"regular",notes:"",createdAt:fmt(new Date())};
               await dbUpsert("guests",ng);
               setGuests(prev=>[...prev,ng]);
@@ -969,8 +930,7 @@ function LoginScreen({users,onLogin}) {
   const [err,setErr]=useState("");
   function doLogin(){ const u=users.find(u=>u.username===form.username&&u.password===form.password); if(u) onLogin(u); else setErr("Грешно потребителско иmе или парола."); }
   return (
-    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',sans-serif"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{width:100%;height:100%;}`}</style>
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',sans-serif",padding:"20px"}}>
       <div style={{background:"#fff",borderRadius:20,padding:"38px 34px",width:"100%",maxWidth:370,boxShadow:"0 30px 80px rgba(0,0,0,.4)"}}>
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{fontSize:44,marginBottom:8}}>🏨</div>
@@ -997,9 +957,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
   const isEdit=!!initial.id;
   const todayStr=fmt(new Date());
 
-  // ── Build initial rooms list ─────────────────────────────────────────────
-  // When editing a grouped booking load all siblings; otherwise start with one entry.
-  // Room entries now only hold { bookingId, roomId, pricePerNight } — dates live in shared.
   const [roomsList, setRoomsList] = useState(()=>{
     if (isEdit && initial.groupId) {
       return bookings
@@ -1009,8 +966,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
     return [{ bookingId:initial.id||`b${Date.now()}`, roomId:initial.roomId||rooms[0]?.id||"", pricePerNight:initial.pricePerNight||"" }];
   });
 
-  // ── Shared fields ────────────────────────────────────────────────────────
-  // checkIn and checkOut are now here — same for every room in the reservation.
   const [shared, setShared] = useState(()=>({
     guestName:       initial.guestName||"",
     phone:           initial.phone||"",
@@ -1032,10 +987,7 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
 
   const [err, setErr] = useState("");
 
-  // ── Derived totals ───────────────────────────────────────────────────────
-  // nights is shared — calculated once from shared.checkIn / checkOut.
   const nights    = shared.checkIn&&shared.checkOut&&shared.checkOut>shared.checkIn ? nightsBetween(shared.checkIn,shared.checkOut) : 0;
-  // Each room has its own price per night, so we compute per-room totals separately.
   const roomTotals = roomsList.map(r=>({
     price: nights>0&&r.pricePerNight ? Math.round(nights*Number(r.pricePerNight)) : 0
   }));
@@ -1043,7 +995,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
   const deposit    = shared.depositReceived&&shared.depositAmount ? Number(shared.depositAmount) : 0;
   const remaining  = shared.fullyPaid ? 0 : Math.max(0, grandTotal - deposit);
 
-  // ── Room helpers ─────────────────────────────────────────────────────────
   function updateRoom(idx, field, value) {
     setRoomsList(prev=>prev.map((r,i)=>i===idx?{...r,[field]:value}:r));
   }
@@ -1054,7 +1005,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
     setRoomsList(prev=>prev.filter((_,i)=>i!==idx));
   }
 
-  // ── Validation & save ────────────────────────────────────────────────────
   function save() {
     if (!shared.guestName.trim())                           return setErr("Въведете иmе на госта.");
     if (!shared.checkIn||!shared.checkOut)                  return setErr("Задайте дати на настаняване и напускане.");
@@ -1063,14 +1013,12 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
       const r=roomsList[i];
       const label=roomsList.length>1?` (Стая ${i+1})`:"";
       if (!r.pricePerNight||Number(r.pricePerNight)<=0)    return setErr(`Въведете цена на нощ${label}.`);
-      // Exclude sibling records of this reservation from the conflict check
       const siblingIds=new Set(roomsList.map(x=>x.bookingId));
       const conflict=bookings.find(b=>!siblingIds.has(b.id)&&b.roomId===r.roomId&&b.status!=="cancelled"&&b.checkIn<shared.checkOut&&b.checkOut>shared.checkIn);
       if (conflict) {
         const roomName=rooms.find(rm=>rm.id===r.roomId)?.name||"стаята";
         return setErr(`${roomName} е вече резервирана за тези дати (${conflict.guestName}).`);
       }
-      // Prevent the same room from being added twice in the same group
       for (let j=0; j<i; j++) {
         if (roomsList[j].roomId===r.roomId) return setErr(`Стаята е добавена два пъти.`);
       }
@@ -1078,35 +1026,34 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
     onSave({ shared, rooms:roomsList });
   }
 
+  const isMobile = window.innerWidth <= 768;
+
   return (
-    <div style={{...S.modal, maxWidth:560}}>
+    <div style={{...S.modal, maxWidth:isMobile ? "100%" : 560, maxHeight:isMobile ? "100%" : "92vh"}}>
       <div style={S.modalHeader}>
-        <span style={S.modalTitle}>{isEdit?"Редактирай резервация":"Нова резервация"}</span>
+        <span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>{isEdit?"Редактирай резервация":"Нова резервация"}</span>
         <button onClick={onClose} style={S.closeBtn}>×</button>
       </div>
-      <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
+      <div style={{padding:isMobile ? "14px 16px" : "18px 20px",overflowY:"auto",maxHeight:isMobile ? "calc(100vh - 130px)" : "calc(90vh - 130px)"}}>
 
-        {/* ── Guest info ── */}
         <Fld label="Иmе на госта"><input value={shared.guestName} onChange={e=>setShared(x=>({...x,guestName:e.target.value}))} style={S.input} placeholder="Пълно иmе"/></Fld>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12}}>
           <Fld label="Телефон"><input value={shared.phone} onChange={e=>setShared(x=>({...x,phone:e.target.value}))} style={S.input} placeholder="+359…"/></Fld>
           <Fld label="Имейл"><input type="email" value={shared.email} onChange={e=>setShared(x=>({...x,email:e.target.value}))} style={S.input} placeholder="guest@email.com"/></Fld>
         </div>
         <Fld label="Националност">
           <NationalitySelect value={shared.nationality} onChange={v=>setShared(x=>({...x,nationality:v}))} inputStyle={S.input}/>
         </Fld>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12}}>
           <Fld label="Дата на резервацията"><input type="date" value={shared.bookingDate} onChange={e=>setShared(x=>({...x,bookingDate:e.target.value}))} style={S.input}/></Fld>
           <Fld label="Източник"><select value={shared.source} onChange={e=>setShared(x=>({...x,source:e.target.value}))} style={S.input}>{SOURCES.map(s=><option key={s}>{s}</option>)}</select></Fld>
         </div>
 
-        {/* ── Shared dates — one check-in / check-out for the whole reservation ── */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12}}>
           <Fld label="Настаняване"><input type="date" value={shared.checkIn}  onChange={e=>setShared(x=>({...x,checkIn:e.target.value}))}  style={S.input}/></Fld>
           <Fld label="Напускане">  <input type="date" value={shared.checkOut} onChange={e=>setShared(x=>({...x,checkOut:e.target.value}))} style={S.input}/></Fld>
         </div>
 
-        {/* ── Rooms — each card is just: which room + price per night ── */}
         <div style={{marginTop:4}}>
           {roomsList.map((room,idx)=>{
             const {price}=roomTotals[idx];
@@ -1117,7 +1064,7 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
                   {roomsList.length>1&&<button onClick={()=>removeRoom(idx)} style={{background:"transparent",border:"none",color:"#94A3B8",cursor:"pointer",fontSize:18,padding:"0 4px",lineHeight:1,fontFamily:"inherit"}}>×</button>}
                 </div>
                 <div style={{padding:"12px 14px"}}>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,alignItems:"end"}}>
+                  <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12,alignItems:"end"}}>
                     <Fld label="Стая">
                       <select value={room.roomId} onChange={e=>updateRoom(idx,"roomId",e.target.value)} style={S.input}>
                         {rooms.map(r=><option key={r.id} value={r.id}>{r.name} — {r.type}</option>)}
@@ -1139,7 +1086,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
           <button onClick={addRoom} style={{...S.outlineBtn,width:"100%",marginBottom:14,color:"#059669",borderColor:"#BBF7D0",background:"#F0FDF4"}}>+ Добави стая</button>
         </div>
 
-        {/* ── Price summary ── */}
         {grandTotal>0&&(
           <div style={{background:"#EFF6FF",borderRadius:10,padding:"12px 14px",marginBottom:14,border:"1px solid #BFDBFE"}}>
             {roomsList.length>1&&roomTotals.map((rt,i)=>(
@@ -1161,7 +1107,6 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
           </div>
         )}
 
-        {/* ── Status, deposit, notes ── */}
         <Fld label="Статус"><select value={shared.status} onChange={e=>setShared(x=>({...x,status:e.target.value}))} style={S.input}>
           <option value="confirmed">Потвърдена</option>
           <option value="pending">Очаква депозит</option>
@@ -1178,7 +1123,7 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
             <span style={{fontWeight:600,fontSize:13,color:"#1E293B"}}>Получен депозит</span>
           </label>
           {shared.depositReceived&&(
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12}}>
               <Fld label="Сума (€)"><input type="number" min="0" value={shared.depositAmount} onChange={e=>setShared(x=>({...x,depositAmount:e.target.value}))} style={S.input} placeholder="0"/></Fld>
               <Fld label="Дата на депозита"><input type="date" value={shared.depositDate} onChange={e=>setShared(x=>({...x,depositDate:e.target.value}))} style={S.input}/></Fld>
             </div>
@@ -1186,15 +1131,15 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
         </div>
 
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderRadius:10,marginBottom:14,border:`2px solid ${remaining===0?"#BBF7D0":"#FECACA"}`,background:remaining===0?"#F0FDF4":"#FFF5F5"}}>
-          <span style={{fontWeight:700,fontSize:14,color:remaining===0?"#166534":"#991B1B"}}>Остава за плащане</span>
-          <span style={{fontWeight:800,fontSize:18,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>
+          <span style={{fontWeight:700,fontSize:isMobile ? 13 : 14,color:remaining===0?"#166534":"#991B1B"}}>Остава за плащане</span>
+          <span style={{fontWeight:800,fontSize:isMobile ? 16 : 18,color:remaining===0?"#166534":"#DC2626"}}>€{remaining}</span>
         </div>
 
         <Fld label="Забележки"><input value={shared.notes} onChange={e=>setShared(x=>({...x,notes:e.target.value}))} style={S.input} placeholder="По желание…"/></Fld>
         <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>Добавена от: <strong style={{color:"#475569"}}>{shared.createdBy}</strong></div>
         {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:10}}>{err}</div>}
       </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={save} style={S.primaryBtn}>{isEdit?"Запази промените":"Създай резервация"}</button>
       </div>
@@ -1203,15 +1148,10 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
 }
 
 // ── VIEW BOOKING MODAL ────────────────────────────────────────────────────────
-// CHANGE: Delete button is now visible to ALL users (not just admins).
-// The reasoning: staff need to be able to delete test/erroneous bookings too.
-// CHANGE 2: Now group-aware — shows all rooms when booking has a groupId.
 function ViewBookingModal({booking:b, bookings, rooms, user, onEdit, onCancel, onDelete, onClose}) {
-  // Collect all booking records for this reservation (1 for single-room, N for groups)
   const groupBookings = b.groupId
     ? bookings.filter(x => x.groupId === b.groupId).sort((a,c)=>a.checkIn<c.checkIn?-1:1)
     : [b];
-  // Grand total = sum of each room's individual price
   const groupTotal = groupBookings.reduce((s,gb)=>s+Number(gb.totalPrice||0),0);
   const deposit    = b.depositReceived ? Number(b.depositAmount)||0 : 0;
   const remaining  = b.fullyPaid ? 0 : Math.max(0, groupTotal - deposit);
@@ -1237,27 +1177,27 @@ function ViewBookingModal({booking:b, bookings, rooms, user, onEdit, onCancel, o
 
   function Row({label,val}) {
     return (
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F1F5F9",fontSize:14}}>
-        <span style={{color:"#64748B",fontSize:12,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase"}}>{label}</span>
-        <span style={{fontWeight:600,color:"#1E293B",maxWidth:220,textAlign:"right"}}>{val}</span>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F1F5F9",fontSize:window.innerWidth <= 768 ? 13 : 14}}>
+        <span style={{color:"#64748B",fontSize:window.innerWidth <= 768 ? 11 : 12,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase"}}>{label}</span>
+        <span style={{fontWeight:600,color:"#1E293B",maxWidth:220,textAlign:"right",fontSize:window.innerWidth <= 768 ? 12 : 14}}>{val}</span>
       </div>
     );
   }
 
+  const isMobile = window.innerWidth <= 768;
+
   return (
-    <div style={S.modal}>
+    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined, maxHeight:isMobile ? "100%" : "92vh"}}>
       <div style={S.modalHeader}>
-        <span style={S.modalTitle}>
+        <span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>
           Детайли за резервацията
           {b.groupId&&<span style={{fontSize:11,fontWeight:700,background:"#EFF6FF",color:"#1D4ED8",borderRadius:6,padding:"2px 8px",marginLeft:10}}>🔗 {groupBookings.length} стаи</span>}
         </span>
         <button onClick={onClose} style={S.closeBtn}>×</button>
       </div>
-      <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
-        {/* Guest & booking info */}
+      <div style={{padding:isMobile ? "14px 16px" : "18px 20px",overflowY:"auto",maxHeight:isMobile ? "calc(100vh - 130px)" : "calc(90vh - 130px)"}}>
         {sharedRows.map(([label,val])=><Row key={label} label={label} val={val}/>)}
 
-        {/* Rooms section */}
         <div style={{margin:"14px 0 4px"}}>
           <div style={{fontSize:11,fontWeight:700,color:"#94A3B8",textTransform:"uppercase",letterSpacing:"1px",marginBottom:8}}>
             {groupBookings.length>1?"Стаи":"Стая"}
@@ -1270,12 +1210,12 @@ function ViewBookingModal({booking:b, bookings, rooms, user, onEdit, onCancel, o
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{width:10,height:10,borderRadius:"50%",background:room?.color||"#94A3B8",display:"inline-block",flexShrink:0}}/>
-                    <span style={{fontWeight:700,fontSize:14,color:"#1E293B"}}>{room?.name||"—"}</span>
+                    <span style={{fontWeight:700,fontSize:isMobile ? 13 : 14,color:"#1E293B"}}>{room?.name||"—"}</span>
                     <span style={{fontSize:11,color:"#94A3B8"}}>{room?.type}</span>
                   </div>
                   <span style={{fontWeight:700,color:"#1E293B"}}>€{gb.totalPrice||0}</span>
                 </div>
-                <div style={{fontSize:12,color:"#64748B"}}>
+                <div style={{fontSize:isMobile ? 11 : 12,color:"#64748B"}}>
                   {gb.checkIn} → {gb.checkOut} · {n} нощ{n!==1?"увки":"увка"} × €{gb.pricePerNight}
                 </div>
               </div>
@@ -1283,13 +1223,12 @@ function ViewBookingModal({booking:b, bookings, rooms, user, onEdit, onCancel, o
           })}
         </div>
 
-        {/* Payment & status info */}
         {paymentRows.map(([label,val])=><Row key={label} label={label} val={val}/>)}
       </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
-        {b.status!=="cancelled"&&<button onClick={()=>onCancel(b)} style={S.outlineBtn}>Анулирай{b.groupId?" всички":""}</button>}
-        <button onClick={()=>{ if(confirm("Изтриете тази резервация? Действието е необратимо.")) onDelete(b); }} style={S.dangerBtn}>Изтрий{b.groupId?" всички":""}</button>
-        <button onClick={onEdit} style={S.primaryBtn}>Редактирай</button>
+      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
+        {b.status!=="cancelled"&&<button onClick={()=>onCancel(b)} style={{...S.outlineBtn,fontSize:isMobile ? 12 : 13}}>Анулирай{b.groupId?" всички":""}</button>}
+        <button onClick={()=>{ if(confirm("Изтриете тази резервация? Действието е необратимо.")) onDelete(b); }} style={{...S.dangerBtn,fontSize:isMobile ? 12 : 13}}>Изтрий{b.groupId?" всички":""}</button>
+        <button onClick={onEdit} style={{...S.primaryBtn,fontSize:isMobile ? 12 : 13}}>Редактирай</button>
       </div>
     </div>
   );
@@ -1301,16 +1240,19 @@ function RoomModal({initial,rooms,onSave,onClose}) {
   const [f,setF]=useState({...initial, id:initial.id||`r${Date.now()}`,name:initial.name||"",type:initial.type||ROOM_TYPES[0],color:initial.color||PALETTE[rooms.length%PALETTE.length]});
   const [err,setErr]=useState("");
   function save(){ if(!f.name.trim()) return setErr("Въведете иmе на стаята."); onSave(f); }
+  
+  const isMobile = window.innerWidth <= 768;
+  
   return (
-    <div style={S.modal}>
-      <div style={S.modalHeader}><span style={S.modalTitle}>{isEdit?"Редактирай стая":"Добави стая"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
-      <div style={{padding:"18px 20px"}}>
+    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined}}>
+      <div style={S.modalHeader}><span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>{isEdit?"Редактирай стая":"Добави стая"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+      <div style={{padding:isMobile ? "14px 16px" : "18px 20px"}}>
         <Fld label="Иmе / Номер"><input value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))} style={S.input} placeholder="напр. Стая 205"/></Fld>
         <Fld label="Тип"><select value={f.type} onChange={e=>setF(x=>({...x,type:e.target.value}))} style={S.input}>{ROOM_TYPES.map(t=><option key={t}>{t}</option>)}</select></Fld>
         <Fld label="Цвят"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{PALETTE.map(c=><div key={c} onClick={()=>setF(x=>({...x,color:c}))} style={{width:28,height:28,borderRadius:"50%",background:c,cursor:"pointer",border:f.color===c?"3px solid #1E293B":"3px solid transparent",transition:"border .1s"}}/>)}</div></Fld>
         {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:4}}>{err}</div>}
       </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={save} style={S.primaryBtn}>{isEdit?"Запази":"Добави стая"}</button>
       </div>
@@ -1323,17 +1265,20 @@ function StaffModal({users,onSave,onClose}) {
   const [f,setF]=useState({id:`u${Date.now()}`,name:"",username:"",password:"",role:"staff"});
   const [err,setErr]=useState("");
   function save(){ if(!f.name.trim()||!f.username.trim()||!f.password.trim()) return setErr("Всички полета са задължителни."); if(users.find(u=>u.username===f.username)) return setErr("Потребителското иmе вече е заето."); onSave(f); }
+  
+  const isMobile = window.innerWidth <= 768;
+  
   return (
-    <div style={S.modal}>
-      <div style={S.modalHeader}><span style={S.modalTitle}>Добави служител</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
-      <div style={{padding:"18px 20px"}}>
+    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined}}>
+      <div style={S.modalHeader}><span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>Добави служител</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+      <div style={{padding:isMobile ? "14px 16px" : "18px 20px"}}>
         <Fld label="Пълно иmе">        <input value={f.name}     onChange={e=>setF(x=>({...x,name:e.target.value}))}     style={S.input} placeholder="напр. Мария Иванова"/></Fld>
         <Fld label="Потребителско иmе"><input value={f.username} onChange={e=>setF(x=>({...x,username:e.target.value}))} style={S.input}/></Fld>
         <Fld label="Парола">           <input type="password" value={f.password} onChange={e=>setF(x=>({...x,password:e.target.value}))} style={S.input}/></Fld>
         <Fld label="Роля"><select value={f.role} onChange={e=>setF(x=>({...x,role:e.target.value}))} style={S.input}><option value="staff">Служител</option><option value="admin">Администратор</option></select></Fld>
         {err&&<div style={{color:"#DC2626",fontSize:13}}>{err}</div>}
       </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={save} style={S.primaryBtn}>Добави служител</button>
       </div>
@@ -1350,44 +1295,60 @@ function GuestDirectory({guests,onEdit,onDelete}) {
     const matchStatus=statusFilter==="all"||g.status===statusFilter;
     return matchSearch&&matchStatus;
   });
+  
+  const isMobile = window.innerWidth <= 768;
+  
   return (
     <div>
-      <div style={{display:"flex",gap:12,marginBottom:18,flexWrap:"wrap",alignItems:"center"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Търси по иmе, телефон, имейл…" style={{...S.input,maxWidth:280}}/>
-        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} style={{...S.input,maxWidth:180}}>
+      <div style={{display:"flex",gap:12,marginBottom:18,flexWrap:"wrap",alignItems:"center",flexDirection:isMobile ? "column" : "row"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Търси по иmе, телефон, имейл…" style={{...S.input,maxWidth:isMobile ? "100%" : 280,width:isMobile ? "100%" : undefined}}/>
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} style={{...S.input,maxWidth:isMobile ? "100%" : 180,width:isMobile ? "100%" : undefined}}>
           <option value="all">Всички статуси</option>
           {Object.entries(GUEST_STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
         </select>
-        <span style={{fontSize:13,color:"#94A3B8",marginLeft:"auto"}}>{filtered.length} гости</span>
+        <span style={{fontSize:13,color:"#94A3B8",marginLeft:isMobile ? 0 : "auto"}}>{filtered.length} гости</span>
       </div>
       <div style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
         {filtered.length===0
           ? <div style={{textAlign:"center",padding:52,color:"#CBD5E1",fontSize:15}}>Няма намерени гости</div>
-          : <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-              <thead><tr>{["Гост","Телефон","Имейл","Престои","Изразходвано","Последно посещение","Статус",""].map(h=>(
-                <th key={h} style={{textAlign:"left",padding:"10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0"}}>{h}</th>
+          : <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:isMobile ? 12 : 13}}>
+              <thead><tr>{(isMobile ? ["Гост","Престои","Статус",""] : ["Гост","Телефон","Имейл","Престои","Изразходвано","Последно посещение","Статус",""]).map(h=>(
+                <th key={h} style={{textAlign:"left",padding:isMobile ? "8px 10px" : "10px 14px",background:"#F8FAFC",color:"#94A3B8",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",borderBottom:"1px solid #E2E8F0",whiteSpace:"nowrap"}}>{h}</th>
               ))}</tr></thead>
               <tbody>
                 {filtered.map(g=>{
                   const st=GUEST_STATUS[g.status]||GUEST_STATUS.regular;
                   return (
                     <tr key={g.id} className="rowhov" style={{borderBottom:"1px solid #F1F5F9"}}>
-                      <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>{g.name}</td>
-                      <td style={{padding:"12px 14px",color:"#374151"}}>{g.phone||"—"}</td>
-                      <td style={{padding:"12px 14px",color:"#374151"}}>{g.email||"—"}</td>
-                      <td style={{padding:"12px 14px",color:"#374151",textAlign:"center"}}>{g.totalStays||0}</td>
-                      <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>€{g.totalSpent||0}</td>
-                      <td style={{padding:"12px 14px",color:"#374151"}}>{g.lastVisit||"—"}</td>
-                      <td style={{padding:"12px 14px"}}><span style={{fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color}}>{st.label}</span></td>
-                      <td style={{padding:"12px 14px",display:"flex",gap:6}}>
-                        <button onClick={()=>onEdit(g)} style={S.outlineBtn}>Редактирай</button>
-                        {onDelete&&<button onClick={()=>onDelete(g.id)} style={S.dangerBtn}>×</button>}
+                      <td style={{padding:isMobile ? "10px 8px" : "12px 14px",fontWeight:600,color:"#1E293B"}}>
+                        <div>{g.name}</div>
+                        {isMobile && <div style={{fontSize:10,color:"#64748B",marginTop:2}}>{g.phone||"—"}</div>}
+                      </td>
+                      {!isMobile && (
+                        <>
+                          <td style={{padding:"12px 14px",color:"#374151"}}>{g.phone||"—"}</td>
+                          <td style={{padding:"12px 14px",color:"#374151"}}>{g.email||"—"}</td>
+                        </>
+                      )}
+                      <td style={{padding:isMobile ? "10px 8px" : "12px 14px",color:"#374151",textAlign:"center"}}>{g.totalStays||0}</td>
+                      {!isMobile && (
+                        <>
+                          <td style={{padding:"12px 14px",fontWeight:600,color:"#1E293B"}}>€{g.totalSpent||0}</td>
+                          <td style={{padding:"12px 14px",color:"#374151"}}>{g.lastVisit||"—"}</td>
+                        </>
+                      )}
+                      <td style={{padding:isMobile ? "10px 8px" : "12px 14px"}}><span style={{fontSize:isMobile ? 10 : 11,fontWeight:600,padding:"3px 9px",borderRadius:999,background:st.bg,color:st.color,whiteSpace:"nowrap"}}>{st.label}</span></td>
+                      <td style={{padding:isMobile ? "10px 8px" : "12px 14px",display:"flex",gap:6}}>
+                        <button onClick={()=>onEdit(g)} style={{...S.outlineBtn,fontSize:isMobile ? 11 : 13,padding:isMobile ? "5px 10px" : "7px 14px"}}>Редактирай</button>
+                        {onDelete&&<button onClick={()=>onDelete(g.id)} style={{...S.dangerBtn,fontSize:isMobile ? 11 : 13,padding:isMobile ? "5px 10px" : "7px 14px"}}>×</button>}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </div>
         }
       </div>
     </div>
@@ -1396,32 +1357,34 @@ function GuestDirectory({guests,onEdit,onDelete}) {
 
 // ── GUEST CONFLICT MODAL ──────────────────────────────────────────────────────
 function GuestConflictModal({existingGuest,booking,onUseExisting,onCreateNew,onClose}) {
+  const isMobile = window.innerWidth <= 768;
+  
   return (
-    <div style={S.modal}>
-      <div style={S.modalHeader}><span style={S.modalTitle}>⚠️ Възможен дубликат</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
-      <div style={{padding:"20px"}}>
-        <p style={{fontSize:14,color:"#374151",marginBottom:16}}>Открит е гост с телефон <strong>{booking.phone}</strong>, но с различно иmе:</p>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined}}>
+      <div style={S.modalHeader}><span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>⚠️ Възможен дубликат</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+      <div style={{padding:isMobile ? "16px" : "20px"}}>
+        <p style={{fontSize:isMobile ? 13 : 14,color:"#374151",marginBottom:16}}>Открит е гост с телефон <strong>{booking.phone}</strong>, но с различно иmе:</p>
+        <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12,marginBottom:20}}>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"14px",border:"1px solid #E2E8F0"}}>
             <div style={{fontSize:11,fontWeight:700,color:"#94A3B8",marginBottom:6,textTransform:"uppercase"}}>Съществуващ гост</div>
-            <div style={{fontWeight:700,color:"#1E293B"}}>{existingGuest.name}</div>
+            <div style={{fontWeight:700,color:"#1E293B",fontSize:isMobile ? 13 : 14}}>{existingGuest.name}</div>
             <div style={{fontSize:12,color:"#64748B"}}>{existingGuest.phone}</div>
           </div>
           <div style={{background:"#FFF7ED",borderRadius:10,padding:"14px",border:"1px solid #FED7AA"}}>
             <div style={{fontSize:11,fontWeight:700,color:"#94A3B8",marginBottom:6,textTransform:"uppercase"}}>Ново иmе</div>
-            <div style={{fontWeight:700,color:"#1E293B"}}>{booking.guestName}</div>
+            <div style={{fontWeight:700,color:"#1E293B",fontSize:isMobile ? 13 : 14}}>{booking.guestName}</div>
             <div style={{fontSize:12,color:"#64748B"}}>{booking.phone}</div>
           </div>
         </div>
-        <p style={{fontSize:13,color:"#64748B",marginBottom:16}}>Изберете как да продължите:</p>
+        <p style={{fontSize:isMobile ? 12 : 13,color:"#64748B",marginBottom:16}}>Изберете как да продължите:</p>
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           <button onClick={()=>onUseExisting(booking)} style={{...S.outlineBtn,textAlign:"left",padding:"12px 14px"}}>
-            <div style={{fontWeight:700,color:"#1E293B"}}>Свържи с „{existingGuest.name}"</div>
-            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Тa е същия гост — резервацията ще се добави към неговия профил</div>
+            <div style={{fontWeight:700,color:"#1E293B",fontSize:isMobile ? 13 : 14}}>Свържи с „{existingGuest.name}"</div>
+            <div style={{fontSize:isMobile ? 11 : 12,color:"#64748B",marginTop:2}}>Tа е същия гост — резервацията ще се добави към неговия профил</div>
           </button>
           <button onClick={()=>onCreateNew(booking)} style={{...S.outlineBtn,textAlign:"left",padding:"12px 14px"}}>
-            <div style={{fontWeight:700,color:"#1E293B"}}>Създай нов профил за „{booking.guestName}"</div>
-            <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Това е различен гост — ще се създаде отделен профил</div>
+            <div style={{fontWeight:700,color:"#1E293B",fontSize:isMobile ? 13 : 14}}>Създай нов профил за „{booking.guestName}"</div>
+            <div style={{fontSize:isMobile ? 11 : 12,color:"#64748B",marginTop:2}}>Това е различен гост — ще се създаде отделен профил</div>
           </button>
         </div>
       </div>
@@ -1434,17 +1397,20 @@ function GuestModal({initial,bookings,rooms,onSave,onClose}) {
   const [f,setF]=useState({...initial});
   const gBkgs=bookings.filter(b=>b.guestId===initial.id&&b.status!=="cancelled").sort((a,b)=>a.checkIn<b.checkIn?1:-1);
   const totalSpent=gBkgs.reduce((s,b)=>s+Number(b.totalPrice||0),0);
+  
+  const isMobile = window.innerWidth <= 768;
+  
   return (
-    <div style={{...S.modal,maxWidth:560}}>
-      <div style={S.modalHeader}><span style={S.modalTitle}>{f.name}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
-      <div style={{padding:"18px 20px",overflowY:"auto",maxHeight:"calc(90vh - 130px)"}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+    <div style={{...S.modal,maxWidth:isMobile ? "100%" : 560, maxHeight:isMobile ? "100%" : "92vh"}}>
+      <div style={S.modalHeader}><span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>{f.name}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
+      <div style={{padding:isMobile ? "14px 16px" : "18px 20px",overflowY:"auto",maxHeight:isMobile ? "calc(100vh - 130px)" : "calc(90vh - 130px)"}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12}}>
           <Fld label="Иmе"><input value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))} style={S.input}/></Fld>
           <Fld label="Статус"><select value={f.status} onChange={e=>setF(x=>({...x,status:e.target.value}))} style={S.input}>
             {Object.entries(GUEST_STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
           </select></Fld>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile ? "1fr" : "1fr 1fr",gap:12}}>
           <Fld label="Телефон"><input value={f.phone||""} onChange={e=>setF(x=>({...x,phone:e.target.value}))} style={S.input}/></Fld>
           <Fld label="Имейл"><input value={f.email||""} onChange={e=>setF(x=>({...x,email:e.target.value}))} style={S.input}/></Fld>
         </div>
@@ -1461,7 +1427,7 @@ function GuestModal({initial,bookings,rooms,onSave,onClose}) {
             : gBkgs.map(b=>{
                 const room=rooms.find(r=>r.id===b.roomId);
                 return (
-                  <div key={b.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F8FAFC",fontSize:13}}>
+                  <div key={b.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F8FAFC",fontSize:isMobile ? 12 : 13}}>
                     <div><div style={{fontWeight:600,color:"#1E293B"}}>{room?.name||"—"}</div><div style={{fontSize:11,color:"#94A3B8"}}>{b.checkIn} → {b.checkOut}</div></div>
                     <div style={{textAlign:"right"}}><div style={{fontWeight:700}}>€{b.totalPrice}</div><div style={{fontSize:11,color:"#94A3B8"}}>{b.source||"—"}</div></div>
                   </div>
@@ -1470,7 +1436,7 @@ function GuestModal({initial,bookings,rooms,onSave,onClose}) {
           }
         </div>
       </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={()=>onSave(f)} style={S.primaryBtn}>Запази</button>
       </div>
