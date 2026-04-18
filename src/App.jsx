@@ -541,7 +541,7 @@ export default function App() {
   const today=fmt(new Date());
   const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
   const days=Array.from({length:daysInMonth},(_,i)=>i+1);
-  const visCalRooms = calFilter.length===0?rooms:rooms.filter(r=>calFilter.includes(r.id));
+  const visCalRooms = (calFilter.length===0?rooms:rooms.filter(r=>calFilter.includes(r.id))).sort((a,b)=>a.name.localeCompare(b.name));
   const visBkgList  = (() => { let b=[...bookings].sort((a,bb)=>a.checkIn<bb.checkIn?1:-1); if(bkgFilter.length) b=b.filter(x=>bkgFilter.includes(x.roomId)); return b; })();
   const occupied    = bookings.filter(b=>b.checkIn<=today&&b.checkOut>today&&b.status!=="cancelled").length;
   const monthCount  = bookings.filter(b=>{ const ms=`${calYear}-${pad(calMonth+1)}-01`,me=`${calYear}-${pad(calMonth+1)}-${pad(daysInMonth)}`; return b.checkIn<=me&&b.checkOut>ms&&b.status!=="cancelled"; }).length;
@@ -838,7 +838,7 @@ export default function App() {
                     <div style={{fontFamily:"'Inter',sans-serif",fontWeight:700,fontSize:15,color:"#1E293B"}}>{room.name}</div>
                     <div style={{fontSize:11,color:"#94A3B8",textTransform:"uppercase",letterSpacing:".06em",margin:"3px 0 10px"}}>{room.type}</div>
                   </div>
-                  <div className="action-buttons" style={{padding:"12px 16px",borderTop:"1px solid #F1F5F9",display:"flex",gap:8}}>
+                  <div className="room-card-actions" style={{padding:"12px 16px",borderTop:"1px solid #F1F5F9",display:"flex",gap:8}}>
                     <button onClick={()=>setModal({type:"room",data:{...room}})} style={S.outlineBtn}>Редактирай</button>
                     {user.role==="admin"&&<button onClick={()=>{if(confirm("Изтриете тази стая?")) removeRoom(room.id);}} style={S.dangerBtn}>Изтрий</button>}
                   </div>
@@ -945,7 +945,6 @@ function LoginScreen({users,onLogin}) {
           </div>
         ))}
         <button onClick={doLogin} style={{...S.primaryBtn,width:"100%",padding:"11px"}}>Вход →</button>
-        <p style={{textAlign:"center",fontSize:11,color:"#CBD5E1",marginTop:14}}>admin/admin123 · staff/staff123</p>
       </div>
     </div>
   );
@@ -1139,7 +1138,7 @@ function BookingModal({rooms,bookings,initial,user,onSave,onClose}) {
         <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>Добавена от: <strong style={{color:"#475569"}}>{shared.createdBy}</strong></div>
         {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:10}}>{err}</div>}
       </div>
-      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",flexDirection:"row",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={save} style={S.primaryBtn}>{isEdit?"Запази промените":"Създай резервация"}</button>
       </div>
@@ -1187,7 +1186,7 @@ function ViewBookingModal({booking:b, bookings, rooms, user, onEdit, onCancel, o
   const isMobile = window.innerWidth <= 768;
 
   return (
-    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined, maxHeight:isMobile ? "100%" : "92vh"}}>
+    <div style={{...S.modal, ...(isMobile && {maxWidth:"100%", maxHeight:"100%"})}}>
       <div style={S.modalHeader}>
         <span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>
           Детайли за резервацията
@@ -1225,7 +1224,7 @@ function ViewBookingModal({booking:b, bookings, rooms, user, onEdit, onCancel, o
 
         {paymentRows.map(([label,val])=><Row key={label} label={label} val={val}/>)}
       </div>
-      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
+      <div style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",flexDirection:"row",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
         {b.status!=="cancelled"&&<button onClick={()=>onCancel(b)} style={{...S.outlineBtn,fontSize:isMobile ? 12 : 13}}>Анулирай{b.groupId?" всички":""}</button>}
         <button onClick={()=>{ if(confirm("Изтриете тази резервация? Действието е необратимо.")) onDelete(b); }} style={{...S.dangerBtn,fontSize:isMobile ? 12 : 13}}>Изтрий{b.groupId?" всички":""}</button>
         <button onClick={onEdit} style={{...S.primaryBtn,fontSize:isMobile ? 12 : 13}}>Редактирай</button>
@@ -1244,7 +1243,7 @@ function RoomModal({initial,rooms,onSave,onClose}) {
   const isMobile = window.innerWidth <= 768;
   
   return (
-    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined}}>
+    <div style={{...S.modal, ...(isMobile && {maxWidth:"100%", maxHeight:"100%"})}}>
       <div style={S.modalHeader}><span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>{isEdit?"Редактирай стая":"Добави стая"}</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
       <div style={{padding:isMobile ? "14px 16px" : "18px 20px"}}>
         <Fld label="Иmе / Номер"><input value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))} style={S.input} placeholder="напр. Стая 205"/></Fld>
@@ -1252,7 +1251,7 @@ function RoomModal({initial,rooms,onSave,onClose}) {
         <Fld label="Цвят"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{PALETTE.map(c=><div key={c} onClick={()=>setF(x=>({...x,color:c}))} style={{width:28,height:28,borderRadius:"50%",background:c,cursor:"pointer",border:f.color===c?"3px solid #1E293B":"3px solid transparent",transition:"border .1s"}}/>)}</div></Fld>
         {err&&<div style={{color:"#DC2626",fontSize:13,marginTop:4}}>{err}</div>}
       </div>
-      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",flexDirection:"row",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={save} style={S.primaryBtn}>{isEdit?"Запази":"Добави стая"}</button>
       </div>
@@ -1269,7 +1268,7 @@ function StaffModal({users,onSave,onClose}) {
   const isMobile = window.innerWidth <= 768;
   
   return (
-    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined}}>
+    <div style={{...S.modal, ...(isMobile && {maxWidth:"100%", maxHeight:"100%"})}}>
       <div style={S.modalHeader}><span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>Добави служител</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
       <div style={{padding:isMobile ? "14px 16px" : "18px 20px"}}>
         <Fld label="Пълно иmе">        <input value={f.name}     onChange={e=>setF(x=>({...x,name:e.target.value}))}     style={S.input} placeholder="напр. Мария Иванова"/></Fld>
@@ -1278,7 +1277,7 @@ function StaffModal({users,onSave,onClose}) {
         <Fld label="Роля"><select value={f.role} onChange={e=>setF(x=>({...x,role:e.target.value}))} style={S.input}><option value="staff">Служител</option><option value="admin">Администратор</option></select></Fld>
         {err&&<div style={{color:"#DC2626",fontSize:13}}>{err}</div>}
       </div>
-      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",flexDirection:"row",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={save} style={S.primaryBtn}>Добави служител</button>
       </div>
@@ -1360,7 +1359,7 @@ function GuestConflictModal({existingGuest,booking,onUseExisting,onCreateNew,onC
   const isMobile = window.innerWidth <= 768;
   
   return (
-    <div style={{...S.modal, maxWidth:isMobile ? "100%" : undefined}}>
+    <div style={{...S.modal, ...(isMobile && {maxWidth:"100%", maxHeight:"100%"})}}>
       <div style={S.modalHeader}><span style={{...S.modalTitle,fontSize:isMobile ? 15 : 17}}>⚠️ Възможен дубликат</span><button onClick={onClose} style={S.closeBtn}>×</button></div>
       <div style={{padding:isMobile ? "16px" : "20px"}}>
         <p style={{fontSize:isMobile ? 13 : 14,color:"#374151",marginBottom:16}}>Открит е гост с телефон <strong>{booking.phone}</strong>, но с различно иmе:</p>
@@ -1436,7 +1435,7 @@ function GuestModal({initial,bookings,rooms,onSave,onClose}) {
           }
         </div>
       </div>
-      <div className="action-buttons" style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <div style={{padding:isMobile ? "12px 16px" : "14px 20px",borderTop:"1px solid #E2E8F0",display:"flex",flexDirection:"row",gap:10,justifyContent:"flex-end"}}>
         <button onClick={onClose} style={S.outlineBtn}>Откажи</button>
         <button onClick={()=>onSave(f)} style={S.primaryBtn}>Запази</button>
       </div>
