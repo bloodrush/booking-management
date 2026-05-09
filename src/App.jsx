@@ -760,7 +760,7 @@ export default function App() {
           {/* ══ BOOKINGS ══════════════════════════════════════════════ */}
           {view==="bookings" && <>
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
-              <span style={{fontSize:14,color:"#64748B"}}>{visBkgList.length} резервации</span>
+              <span style={{fontSize:14,color:"#64748B"}}>{(() => { const seen = new Set(); return visBkgList.filter(b => { if (!b.groupId) return true; if (seen.has(b.groupId)) return false; seen.add(b.groupId); return true; }).length; })()} резервации</span>
               <MultiSelect label="Стаи" options={rooms} selected={bkgFilter} onChange={setBkgFilter}/>
               {window.innerWidth <= 768 && (
                 <button
