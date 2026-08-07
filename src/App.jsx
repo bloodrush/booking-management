@@ -667,7 +667,10 @@ export default function App() {
                       const isToday=ds===today;
                       const dow=new Date(ds).getDay();
                       const isWe=dow===0||dow===6;
-                      return <th key={d} style={{background:isToday?"#D97706":isWe?"#243150":"#1E293B",color:isToday?"#fff":isWe?"#94A3B8":"#64748B",padding:"6px 2px",fontSize:10,fontWeight:700,textAlign:"center",minWidth:window.innerWidth <= 768 ? 28 : 32,width:window.innerWidth <= 768 ? 28 : 32,borderRight:"1px solid #0f1a27"}}>{d}</th>;
+                      return <th key={d} style={{background:isToday?"#D97706":isWe?"#243150":"#1E293B",color:isToday?"#fff":isWe?"#7CA4D4":"#64748B",padding:"4px 2px",fontSize:10,fontWeight:700,textAlign:"center",minWidth:window.innerWidth <= 768 ? 28 : 32,width:window.innerWidth <= 768 ? 28 : 32,borderRight:"1px solid #0f1a27"}}>
+                        <div>{d}</div>
+                        <div style={{fontSize:8,fontWeight:600,marginTop:2,opacity:isToday?0.85:1}}>{"НПВСЧПС"[dow]}</div>
+                      </th>;
                     })}
                   </tr>
                 </thead>
