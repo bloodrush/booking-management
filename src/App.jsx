@@ -661,15 +661,15 @@ export default function App() {
               <table style={{borderCollapse:"collapse",minWidth:"100%"}}>
                 <thead>
                   <tr>
-                    <th style={{background:"#1E293B",color:"#94A3B8",padding:"10px 14px",fontSize:12,fontWeight:600,textAlign:"left",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:3,minWidth:window.innerWidth <= 768 ? 80 : 130,borderRight:"1px solid #0f1a27"}}>Стая</th>
+                    <th style={{background:"#1E293B",color:"#CBD5E1",padding:"10px 14px",fontSize:12,fontWeight:600,textAlign:"left",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:3,minWidth:window.innerWidth <= 768 ? 80 : 130,borderRight:"1px solid #0f1a27"}}>Стая</th>
                     {days.map(d=>{
                       const ds=`${calYear}-${pad(calMonth+1)}-${pad(d)}`;
                       const isToday=ds===today;
                       const dow=new Date(ds).getDay();
                       const isWe=dow===0||dow===6;
-                      return <th key={d} style={{background:isToday?"#D97706":isWe?"#243150":"#1E293B",color:isToday?"#fff":isWe?"#7CA4D4":"#64748B",padding:"4px 2px",fontSize:10,fontWeight:700,textAlign:"center",minWidth:window.innerWidth <= 768 ? 28 : 32,width:window.innerWidth <= 768 ? 28 : 32,borderRight:"1px solid #0f1a27"}}>
+                      return <th key={d} style={{background:isToday?"#D97706":isWe?"#1e3a8a":"#1E293B",color:isToday?"#fff":isWe?"#BFDBFE":"#CBD5E1",padding:"4px 2px",fontSize:12,fontWeight:700,textAlign:"center",minWidth:window.innerWidth <= 768 ? 28 : 32,width:window.innerWidth <= 768 ? 28 : 32,borderRight:"1px solid #0f1a27"}}>
                         <div>{d}</div>
-                        <div style={{fontSize:8,fontWeight:600,marginTop:2,opacity:isToday?0.85:1}}>{"НПВСЧПС"[dow]}</div>
+                        <div style={{fontSize:10,fontWeight:600,marginTop:2,opacity:isToday?0.85:1}}>{"НПВСЧПС"[dow]}</div>
                       </th>;
                     })}
                   </tr>
